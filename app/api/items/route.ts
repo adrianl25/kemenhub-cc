@@ -4,7 +4,7 @@ export const revalidate = 60;
 
 import Parser from "rss-parser";
 
-// ====== RSS item typing (sesuai rss-parser) ======
+// ===== Types dari rss-parser (disederhanakan) =====
 type RSSItem = {
   title?: string;
   link?: string;
@@ -12,7 +12,7 @@ type RSSItem = {
   contentSnippet?: string;
 };
 
-// ====== Output types (selaras dengan UI kamu) ======
+// ===== Output types (selaras dengan UI) =====
 type NewsOut = {
   id: string;
   title: string;
@@ -21,7 +21,7 @@ type NewsOut = {
   link: string;
   summary?: string;
   entities?: string[];
-  note?: string;
+  note?: string; // keterangan saat fallback
 };
 
 type EventOut = {
@@ -52,14 +52,14 @@ type ItemsResponse = {
   quotes: QuoteOut[];
 };
 
-// ====== Sumber RSS kredibel ======
+// ===== Sumber RSS kredibel =====
 const FEEDS: string[] = [
   "https://www.antaranews.com/rss/terkini.xml",
   "https://rss.kompas.com/nasional",
   "https://www.tempo.co/rss/nasional",
 ];
 
-// ====== Util ======
+// ===== Utils =====
 function domainOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -72,7 +72,6 @@ function isValidDate(d: Date): boolean {
   return !Number.isNaN(+d);
 }
 
-// Kata kunci default; bisa dioverride via ?q=
 const DEFAULT_KEYWORDS: string[] = [
   "kemenhub",
   "kementerian perhubungan",
@@ -131,7 +130,7 @@ async function loadNewsFromFeeds(
         }
       }
     } catch {
-      // feed ini gagal → lanjut feed lain
+      // jika satu feed gagal, lanjut feed lain
       continue;
     }
   }
@@ -140,7 +139,8 @@ async function loadNewsFromFeeds(
   raw.sort(byDateDesc);
 
   if (hits.length > 0) return hits;
-  // fallback bila tidak ada yang cocok
+
+  // fallback supaya tidak kosong
   return raw.slice(0, fallbackCount).map((n) => ({
     ...n,
     note: "fallback_no_keyword_hits",
@@ -149,7 +149,8 @@ async function loadNewsFromFeeds(
 
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  // types=news,events,quotes (saat ini news saja yang terisi)
+
+  // ?types=news,events,quotes — saat ini news yang aktif
   const types = (url.searchParams.get("types") || "")
     .split(",")
     .map((s) => s.trim())
@@ -175,7 +176,7 @@ export async function GET(req: Request): Promise<Response> {
     ? await loadNewsFromFeeds(keywords, fallbackCount)
     : [];
 
-  // Tahap berikutnya: isi events & quotes dari sumber resmi
+  // tempat events & quotes nanti (tahap berikutnya)
   const events: EventOut[] = [];
   const quotes: QuoteOut[] = [];
 

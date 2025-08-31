@@ -1,9 +1,9 @@
-'use client';
+"use client";
 import React, { useMemo, useState } from "react";
 
 // =============================
-// Command Center Kemenhub - Prototype UI (Next.js/App Router compatible)
-// Tailwind CSS required. ASCII-only content to satisfy ESLint/react rules.
+// Command Center Kemenhub - Prototype UI (Next.js/App Router)
+// Tailwind CSS required. ASCII-only to satisfy ESLint/react rules.
 // =============================
 
 // --- Sample seed data (mock) ---
@@ -34,6 +34,7 @@ type NewsItem = {
   link: string;
   summary?: string;
   entities?: string[];
+  note?: string;
 };
 
 type QuoteItem = {
@@ -347,11 +348,59 @@ export default function DashboardPrototype() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
+  // ===== LIVE data states =====
+  const [liveNews, setLiveNews] = useState<NewsItem[]>([]);
+  const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
+  const [liveQuotes, setLiveQuotes] = useState<QuoteItem[]>([]);
+  const [dataMode, setDataMode] = useState<"LIVE" | "MOCK">("MOCK");
+  const [lastSync, setLastSync] = useState<string>("");
+
+  // Ambil data LIVE dari /api/items (news aktif; events/quotes kosong dulu)
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/items?types=news,events,quotes");
+        if (!res.ok) throw new Error("bad status");
+        const json = await res.json();
+        if (!mounted) return;
+
+        if (Array.isArray(json.news) && json.news.length) setLiveNews(json.news as NewsItem[]);
+        if (Array.isArray(json.events) && json.events.length) setLiveEvents(json.events as EventItem[]);
+        if (Array.isArray(json.quotes) && json.quotes.length) setLiveQuotes(json.quotes as QuoteItem[]);
+
+        if (
+          (json.news?.length ?? 0) +
+            (json.events?.length ?? 0) +
+            (json.quotes?.length ?? 0) >
+          0
+        ) {
+          setDataMode("LIVE");
+          setLastSync(
+            new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
+          );
+        } else {
+          setDataMode("MOCK");
+        }
+      } catch {
+        if (!mounted) return;
+        setDataMode("MOCK");
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const minDate = useMemo(() => getMinDate(timeFilter), [timeFilter]);
 
   const tagsUniverse = useMemo(() => {
     const set = new Set<string>(["All"]);
-    const all: CombinedItem[] = [...sampleEvents, ...sampleNews, ...sampleQuotes];
+    const all: CombinedItem[] = [
+      ...(liveEvents.length ? liveEvents : sampleEvents),
+      ...(liveNews.length ? liveNews : sampleNews),
+      ...(liveQuotes.length ? liveQuotes : sampleQuotes),
+    ];
     all.forEach((it) => {
       if ("tags" in it && Array.isArray((it as EventItem | QuoteItem).tags)) {
         (it as EventItem | QuoteItem).tags!.forEach((t) => set.add(t));
@@ -361,19 +410,36 @@ export default function DashboardPrototype() {
       }
     });
     return [...set];
-  }, []);
+  }, [liveEvents, liveNews, liveQuotes]);
 
+  // ===== Pakai LIVE bila ada, fallback mock =====
   const filteredEvents = useMemo(
-    () => filterEvents(sampleEvents, { minDate, onlyMinister, tag, query }),
-    [minDate, onlyMinister, tag, query]
+    () =>
+      filterEvents(liveEvents.length ? liveEvents : sampleEvents, {
+        minDate,
+        onlyMinister,
+        tag,
+        query,
+      }),
+    [minDate, onlyMinister, tag, query, liveEvents]
   );
   const filteredNews = useMemo(
-    () => filterNews(sampleNews, { minDate, tag, query }),
-    [minDate, tag, query]
+    () =>
+      filterNews(liveNews.length ? liveNews : sampleNews, {
+        minDate,
+        tag,
+        query,
+      }),
+    [minDate, tag, query, liveNews]
   );
   const filteredQuotes = useMemo(
-    () => filterQuotes(sampleQuotes, { minDate, tag, query }),
-    [minDate, tag, query]
+    () =>
+      filterQuotes(liveQuotes.length ? liveQuotes : sampleQuotes, {
+        minDate,
+        tag,
+        query,
+      }),
+    [minDate, tag, query, liveQuotes]
   );
 
   const handleGenerateCaption = () => {
@@ -386,7 +452,12 @@ export default function DashboardPrototype() {
       return;
     }
     const title = top.title ?? "Pembaruan kegiatan hari ini";
-    const info = top.summary ?? top.source ?? "Info terbaru";
+    const info =
+      "summary" in top && top.summary
+        ? top.summary
+        : "source" in top
+        ? (top as NewsItem).source
+        : "Info terbaru";
     const base = `Menhub: ${title} - ${info}. #Kemenhub #Transportasi`;
     setCaption(base);
     setToast("Caption dibuat");
@@ -478,7 +549,25 @@ export default function DashboardPrototype() {
             </div>
             <div>
               <div className="font-semibold">Command Center Kemenhub</div>
-              <div className="text-xs opacity-70">Internal - Prototype UI</div>
+              <div className="text-xs opacity-70">
+                Internal - Prototype UI
+                {/* Badge status data */}
+                <span
+                  className={
+                    "ml-2 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide border " +
+                    (dataMode === "LIVE"
+                      ? darkMode
+                        ? "bg-emerald-900/40 border-emerald-500 text-emerald-300"
+                        : "bg-emerald-50 border-emerald-600 text-emerald-700"
+                      : darkMode
+                      ? "bg-slate-700 border-slate-500 text-slate-200"
+                      : "bg-slate-100 border-slate-400 text-slate-700")
+                  }
+                >
+                  Data: {dataMode}
+                  {lastSync ? ` • Last sync ${lastSync}` : ""}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -905,6 +994,11 @@ export default function DashboardPrototype() {
                             {t}
                           </span>
                         ))}
+                        {n.note && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] border bg-amber-50 border-amber-300 text-amber-700">
+                            {n.note}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex flex-row sm:flex-col gap-2 sm:items-end">
@@ -1194,67 +1288,6 @@ export default function DashboardPrototype() {
         </aside>
       </main>
 
-      {tagsOpen && (
-        <div className="fixed inset-0 z-40">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setTagsOpen(false)} />
-          <div
-            className={classNames(
-              "absolute right-0 top-0 h-full w-96 max-w-[90%] shadow-2xl p-4 overflow-y-auto",
-              darkMode ? "bg-slate-800" : "bg-white"
-            )}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <div className="font-semibold">Panel Tag</div>
-                <div className="text-xs opacity-70">
-                  Pilih satu untuk filter atau reset ke All
-                </div>
-              </div>
-              <button onClick={() => setTagsOpen(false)} className="text-sm opacity-80">
-                Tutup
-              </button>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {tagsUniverse.map((t) => (
-                <button
-                  key={t}
-                  onClick={() => {
-                    setTag(t);
-                    setTagsOpen(false);
-                  }}
-                  className={classNames(
-                    "px-3 py-2 rounded-xl border text-sm",
-                    t === tag
-                      ? darkMode
-                        ? "bg-indigo-500 text-white border-indigo-500"
-                        : "bg-indigo-600 text-white border-indigo-600"
-                      : darkMode
-                      ? "bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
-                      : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-                  )}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            <div className="mt-4">
-              <button
-                onClick={() => {
-                  setTag("All");
-                  setTagsOpen(false);
-                }}
-                className={classNames(
-                  "px-3 py-2 rounded-xl border text-sm",
-                  darkMode ? "bg-slate-800 border-slate-600" : "bg-white border-slate-300 hover:bg-slate-50"
-                )}
-              >
-                Reset ke All
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Simple toast (single) */}
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 text-sm px-4 py-3 rounded-lg shadow-lg text-white bg-slate-900">
@@ -1263,7 +1296,8 @@ export default function DashboardPrototype() {
       )}
 
       <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">
-        Prototype UI - Tidak terhubung ke data nyata. Integrasi backend diperlukan.
+        Data Mode: {dataMode}
+        {lastSync ? ` • Last sync ${lastSync} WIB` : ""} — News LIVE via RSS. (Events & Quotes mock sementara)
       </footer>
     </div>
   );
