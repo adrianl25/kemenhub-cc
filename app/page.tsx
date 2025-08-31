@@ -355,12 +355,14 @@ export default function DashboardPrototype() {
   const [dataMode, setDataMode] = useState<"LIVE" | "MOCK">("MOCK");
   const [lastSync, setLastSync] = useState<string>("");
 
-  // Ambil data LIVE dari /api/items (news aktif; events/quotes kosong dulu)
+  // Ambil data LIVE dari /api/items: fokus Menhub/Kemenhub
   React.useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const res = await fetch("/api/items?types=news,events,quotes");
+        const res = await fetch(
+          "/api/items?types=news,events,quotes&q=menhub,budi karya sumadi,kementerian perhubungan,kemenhub"
+        );
         if (!res.ok) throw new Error("bad status");
         const json = await res.json();
         if (!mounted) return;
@@ -994,11 +996,6 @@ export default function DashboardPrototype() {
                             {t}
                           </span>
                         ))}
-                        {n.note && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] border bg-amber-50 border-amber-300 text-amber-700">
-                            {n.note}
-                          </span>
-                        )}
                       </div>
                     </div>
                     <div className="flex flex-row sm:flex-col gap-2 sm:items-end">
