@@ -1,9 +1,18 @@
 // app/api/items/route.ts
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 export const revalidate = 60;
 
-import Parser from 'rss-parser';
+import Parser from "rss-parser";
 
+// ====== RSS item typing (sesuai rss-parser) ======
+type RSSItem = {
+  title?: string;
+  link?: string;
+  pubDate?: string;
+  contentSnippet?: string;
+};
+
+// ====== Output types (selaras dengan UI kamu) ======
 type NewsOut = {
   id: string;
   title: string;
@@ -12,141 +21,170 @@ type NewsOut = {
   link: string;
   summary?: string;
   entities?: string[];
-  note?: string; // keterangan fallback/debug
+  note?: string;
 };
 
-type ItemsResponse = { news: NewsOut[]; events: any[]; quotes: any[] };
-
-type FeedItem = {
-  title?: string;
-  link?: string;
-  isoDate?: string;
-  contentSnippet?: string;
+type EventOut = {
+  id: string;
+  title: string;
+  date: string; // ISO
+  location: string;
+  attendedByMinister: boolean;
+  source: string;
+  tags?: string[];
+  summary?: string;
+  link: string;
 };
 
-const parser = new Parser<{}, FeedItem>();
+type QuoteOut = {
+  id: string;
+  text: string;
+  speaker: string;
+  date: string; // ISO
+  context?: string;
+  link: string;
+  tags?: string[];
+};
 
-// Kamu boleh tambah sumber lain di sini
-const FEEDS = [
-  'https://www.antaranews.com/rss/terkini.xml',
-  'https://rss.kompas.com/nasional',
-  'https://www.tempo.co/rss/nasional',
-  // 'https://news.detik.com/rss', // opsional: detik
+type ItemsResponse = {
+  news: NewsOut[];
+  events: EventOut[];
+  quotes: QuoteOut[];
+};
+
+// ====== Sumber RSS kredibel ======
+const FEEDS: string[] = [
+  "https://www.antaranews.com/rss/terkini.xml",
+  "https://rss.kompas.com/nasional",
+  "https://www.tempo.co/rss/nasional",
 ];
 
-// Helper: ambil hostname jadi "antara…", "kompas…"
-function domainOf(url: string) {
-  try { return new URL(url).hostname.replace(/^www\./, ''); }
-  catch { return 'unknown'; }
-}
-
-// Kata kunci default (bisa di-override via ?q=)
-const DEFAULT_KEYWORDS = [
-  'kemenhub',
-  'kementerian perhubungan',
-  'menhub',
-  'budi karya',          // sesuaikan jika perlu
-  'perhubungan',
-  'kementerian perhubungan ri'
-];
-
-// Pencocokan di title *dan* contentSnippet
-function matchKeywords(title = '', snippet = '', keywords: string[]) {
-  const t = (title || '').toLowerCase();
-  const s = (snippet || '').toLowerCase();
-  return keywords.some((k) => {
-    const kk = k.toLowerCase();
-    return t.includes(kk) || s.includes(kk);
-  });
-}
-
-// Timeout kecil agar tidak menggantung
-async function parseWithTimeout(feedUrl: string, ms = 12000) {
-  const controller = new AbortController();
-  const to = setTimeout(() => controller.abort(), ms);
+// ====== Util ======
+function domainOf(url: string): string {
   try {
-    // rss-parser menerima URL langsung
-    return await parser.parseURL(feedUrl);
-  } finally {
-    clearTimeout(to);
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "unknown";
   }
 }
 
-async function loadNewsFromFeeds(keywords: string[], fallbackCount = 15): Promise<NewsOut[]> {
+function isValidDate(d: Date): boolean {
+  return !Number.isNaN(+d);
+}
+
+// Kata kunci default; bisa dioverride via ?q=
+const DEFAULT_KEYWORDS: string[] = [
+  "kemenhub",
+  "kementerian perhubungan",
+  "menhub",
+  "budi karya",
+  "perhubungan",
+  "kementerian perhubungan ri",
+];
+
+function matchKeywords(textA = "", textB = "", keywords: string[]): boolean {
+  const a = textA.toLowerCase();
+  const b = textB.toLowerCase();
+  return keywords.some((k) => {
+    const kk = k.toLowerCase();
+    return a.includes(kk) || b.includes(kk);
+  });
+}
+
+const byDateDesc = (a: { publishedAt: string }, b: { publishedAt: string }) =>
+  +new Date(b.publishedAt) - +new Date(a.publishedAt);
+
+async function loadNewsFromFeeds(
+  keywords: string[],
+  fallbackCount: number
+): Promise<NewsOut[]> {
+  const parser = new Parser<RSSItem>();
   const hits: NewsOut[] = [];
   const raw: NewsOut[] = [];
 
   for (const feedUrl of FEEDS) {
     try {
-      const feed = await parseWithTimeout(feedUrl);
+      const feed = await parser.parseURL(feedUrl);
       const source = domainOf(feedUrl);
+      const items = feed.items ?? [];
 
-      for (const it of (feed.items || [])) {
-        const title = it.title || '(tanpa judul)';
-        const link = it.link || '';
-        const iso = it.isoDate ? new Date(it.isoDate) : null;
-
-        if (!link || !iso || isNaN(+iso)) continue;
+      for (const it of items) {
+        const title = it.title ?? "";
+        const link = it.link ?? "";
+        const published = it.pubDate ? new Date(it.pubDate) : undefined;
+        if (!link || !published || !isValidDate(published)) continue;
 
         const base: NewsOut = {
           id: `${source}#${link}`,
-          title,
+          title: title || "(tanpa judul)",
           source,
-          publishedAt: iso.toISOString(),
+          publishedAt: published.toISOString(),
           link,
-          summary: it.contentSnippet || '',
-          entities: ['Kemenhub'],
+          summary: it.contentSnippet ?? "",
+          entities: ["Kemenhub"],
         };
 
         raw.push(base);
 
-        if (matchKeywords(title, it.contentSnippet || '', keywords)) {
+        if (matchKeywords(title, it.contentSnippet ?? "", keywords)) {
           hits.push(base);
         }
       }
     } catch {
-      // biarkan lanjut ke feed berikutnya
+      // feed ini gagal → lanjut feed lain
       continue;
     }
   }
 
-  // Urut terbaru
-  const byDateDesc = (a: NewsOut, b: NewsOut) =>
-    +new Date(b.publishedAt) - +new Date(a.publishedAt);
-
   hits.sort(byDateDesc);
   raw.sort(byDateDesc);
 
-  if (hits.length > 0) {
-    return hits;
-  }
-
-  // Fallback: kalau tidak ada yang cocok keyword, berikan beberapa item terbaru
-  return raw.slice(0, fallbackCount).map((n) => ({ ...n, note: 'fallback_no_keyword_hits' }));
+  if (hits.length > 0) return hits;
+  // fallback bila tidak ada yang cocok
+  return raw.slice(0, fallbackCount).map((n) => ({
+    ...n,
+    note: "fallback_no_keyword_hits",
+  }));
 }
 
-export async function GET(req: Request) {
+export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
-  const types = (url.searchParams.get('types') || '')
-    .split(',')
+  // types=news,events,quotes (saat ini news saja yang terisi)
+  const types = (url.searchParams.get("types") || "")
+    .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Ambil ?q=keyword1,keyword2 kalau ada; kalau tidak, pakai default
-  const q = url.searchParams.get('q');
+  // override kata kunci: ?q=menhub,kemenhub,transportasi
+  const q = url.searchParams.get("q");
   const keywords = q
-    ? q.split(',').map((s) => s.trim()).filter(Boolean)
+    ? q
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
     : DEFAULT_KEYWORDS;
 
-  const wantsNews = types.length === 0 || types.includes('news');
-  const news = wantsNews ? await loadNewsFromFeeds(keywords) : [];
+  // limit fallback: ?limit=15
+  const fallbackCount = Math.max(
+    1,
+    Math.min(50, Number(url.searchParams.get("limit") ?? 15))
+  );
 
-  const body: ItemsResponse = { news, events: [], quotes: [] };
+  const wantsNews = types.length === 0 || types.includes("news");
+  const news = wantsNews
+    ? await loadNewsFromFeeds(keywords, fallbackCount)
+    : [];
+
+  // Tahap berikutnya: isi events & quotes dari sumber resmi
+  const events: EventOut[] = [];
+  const quotes: QuoteOut[] = [];
+
+  const body: ItemsResponse = { news, events, quotes };
 
   return new Response(JSON.stringify(body, null, 2), {
     headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 's-maxage=60, stale-while-revalidate=300',
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "s-maxage=60, stale-while-revalidate=300",
     },
   });
 }
