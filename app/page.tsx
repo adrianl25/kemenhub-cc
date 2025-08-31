@@ -2,8 +2,8 @@
 import React, { useMemo, useState } from "react";
 
 // =============================
-// Command Center Kemenhub - Prototype UI (Next.js/App Router)
-// Tailwind CSS required. ASCII-only to satisfy ESLint/react rules.
+// Command Center Kemenhub - LIVE-first UI
+// Tailwind CSS required.
 // =============================
 
 // --- Sample seed data (mock) ---
@@ -34,7 +34,6 @@ type NewsItem = {
   link: string;
   summary?: string;
   entities?: string[];
-  note?: string;
 };
 
 type QuoteItem = {
@@ -47,7 +46,6 @@ type QuoteItem = {
   tags?: string[];
 };
 
-// Union helper to avoid any
 type CombinedItem = EventItem | NewsItem | QuoteItem;
 
 const sampleEvents: EventItem[] = [
@@ -348,45 +346,47 @@ export default function DashboardPrototype() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
-  // ===== LIVE data states =====
+  // LIVE data states
   const [liveNews, setLiveNews] = useState<NewsItem[]>([]);
   const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
   const [liveQuotes, setLiveQuotes] = useState<QuoteItem[]>([]);
   const [dataMode, setDataMode] = useState<"LIVE" | "MOCK">("MOCK");
   const [lastSync, setLastSync] = useState<string>("");
 
-  // Ambil data LIVE dari /api/items: fokus Menhub/Kemenhub
+  // Ambil data LIVE fokus Menhub/Kemenhub
   React.useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const res = await fetch(
-          "/api/items?types=news,events,quotes&q=menhub,budi karya sumadi,kementerian perhubungan,kemenhub"
+          "/api/items?types=news,events,quotes&q=menhub,budi karya sumadi,kementerian perhubungan,kemenhub",
+          { cache: "no-store" }
         );
         if (!res.ok) throw new Error("bad status");
         const json = await res.json();
         if (!mounted) return;
 
-        if (Array.isArray(json.news) && json.news.length) setLiveNews(json.news as NewsItem[]);
-        if (Array.isArray(json.events) && json.events.length) setLiveEvents(json.events as EventItem[]);
-        if (Array.isArray(json.quotes) && json.quotes.length) setLiveQuotes(json.quotes as QuoteItem[]);
+        // set hasil (meski kosong)
+        setLiveNews(Array.isArray(json.news) ? (json.news as NewsItem[]) : []);
+        setLiveEvents(
+          Array.isArray(json.events) ? (json.events as EventItem[]) : []
+        );
+        setLiveQuotes(
+          Array.isArray(json.quotes) ? (json.quotes as QuoteItem[]) : []
+        );
 
-        if (
-          (json.news?.length ?? 0) +
-            (json.events?.length ?? 0) +
-            (json.quotes?.length ?? 0) >
-          0
-        ) {
-          setDataMode("LIVE");
-          setLastSync(
-            new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
-          );
-        } else {
-          setDataMode("MOCK");
-        }
+        // TANDAI SELALU LIVE JIKA FETCH BERHASIL
+        setDataMode("LIVE");
+        setLastSync(
+          new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
+        );
       } catch {
         if (!mounted) return;
+        // Jika total error (network/server), baru fallback ke MOCK
         setDataMode("MOCK");
+        setLiveNews([]);
+        setLiveEvents([]);
+        setLiveQuotes([]);
       }
     })();
     return () => {
@@ -399,9 +399,9 @@ export default function DashboardPrototype() {
   const tagsUniverse = useMemo(() => {
     const set = new Set<string>(["All"]);
     const all: CombinedItem[] = [
-      ...(liveEvents.length ? liveEvents : sampleEvents),
-      ...(liveNews.length ? liveNews : sampleNews),
-      ...(liveQuotes.length ? liveQuotes : sampleQuotes),
+      ...(dataMode === "LIVE" ? liveEvents : sampleEvents),
+      ...(dataMode === "LIVE" ? liveNews : sampleNews),
+      ...(dataMode === "LIVE" ? liveQuotes : sampleQuotes),
     ];
     all.forEach((it) => {
       if ("tags" in it && Array.isArray((it as EventItem | QuoteItem).tags)) {
@@ -412,36 +412,40 @@ export default function DashboardPrototype() {
       }
     });
     return [...set];
-  }, [liveEvents, liveNews, liveQuotes]);
+  }, [liveEvents, liveNews, liveQuotes, dataMode]);
 
-  // ===== Pakai LIVE bila ada, fallback mock =====
+  // Gunakan LIVE bila dataMode === LIVE (meski kosong), selain itu pakai mock
+  const sourceEvents = dataMode === "LIVE" ? liveEvents : sampleEvents;
+  const sourceNews = dataMode === "LIVE" ? liveNews : sampleNews;
+  const sourceQuotes = dataMode === "LIVE" ? liveQuotes : sampleQuotes;
+
   const filteredEvents = useMemo(
     () =>
-      filterEvents(liveEvents.length ? liveEvents : sampleEvents, {
+      filterEvents(sourceEvents, {
         minDate,
         onlyMinister,
         tag,
         query,
       }),
-    [minDate, onlyMinister, tag, query, liveEvents]
+    [minDate, onlyMinister, tag, query, sourceEvents]
   );
   const filteredNews = useMemo(
     () =>
-      filterNews(liveNews.length ? liveNews : sampleNews, {
+      filterNews(sourceNews, {
         minDate,
         tag,
         query,
       }),
-    [minDate, tag, query, liveNews]
+    [minDate, tag, query, sourceNews]
   );
   const filteredQuotes = useMemo(
     () =>
-      filterQuotes(liveQuotes.length ? liveQuotes : sampleQuotes, {
+      filterQuotes(sourceQuotes, {
         minDate,
         tag,
         query,
       }),
-    [minDate, tag, query, liveQuotes]
+    [minDate, tag, query, sourceQuotes]
   );
 
   const handleGenerateCaption = () => {
@@ -456,7 +460,7 @@ export default function DashboardPrototype() {
     const title = top.title ?? "Pembaruan kegiatan hari ini";
     const info =
       "summary" in top && top.summary
-        ? top.summary
+        ? (top as NewsItem).summary!
         : "source" in top
         ? (top as NewsItem).source
         : "Info terbaru";
@@ -553,7 +557,6 @@ export default function DashboardPrototype() {
               <div className="font-semibold">Command Center Kemenhub</div>
               <div className="text-xs opacity-70">
                 Internal - Prototype UI
-                {/* Badge status data */}
                 <span
                   className={
                     "ml-2 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide border " +
@@ -1097,195 +1100,8 @@ export default function DashboardPrototype() {
             </Card>
           )}
         </section>
-
-        <aside className="col-span-12 lg:col-span-4 space-y-4 sm:space-y-6 lg:sticky lg:top-20 self-start">
-          <div className="hidden lg:block">
-            <Card dark={darkMode}>
-              <SectionHeader
-                icon={
-                  <span
-                    className={classNames(
-                      "w-2.5 h-2.5 rounded-full inline-block",
-                      darkMode ? "bg-amber-400" : "bg-amber-500"
-                    )}
-                  />
-                }
-                title="Status Ingestor"
-              />
-              <ul className="text-sm space-y-2">
-                <li>
-                  Agenda Resmi: <span className="text-emerald-500 font-medium">OK</span> - 30 menit lalu
-                </li>
-                <li>
-                  Media Sosial: <span className="text-emerald-500 font-medium">OK</span> - 28 menit lalu
-                </li>
-                <li>
-                  Portal Berita: <span className="text-amber-500 font-medium">Terjadwal</span> - 10 menit lagi
-                </li>
-              </ul>
-            </Card>
-
-            <Card dark={darkMode}>
-              <SectionHeader
-                icon={
-                  <span
-                    className={classNames(
-                      "w-2.5 h-2.5 rounded-full inline-block",
-                      darkMode ? "bg-amber-400" : "bg-amber-500"
-                    )}
-                  />
-                }
-                title="Sumber (konfigurasi contoh)"
-              />
-              <div className="text-sm">
-                <details open>
-                  <summary className="cursor-pointer select-none font-medium">
-                    Resmi
-                  </summary>
-                  <ul className="list-disc ml-5 mt-1 space-y-1">
-                    <li>Portal Kemenhub (agenda dan siaran pers)</li>
-                    <li>Akun media sosial resmi</li>
-                    <li>Dokumen publik (PDF/RSS bila tersedia)</li>
-                  </ul>
-                </details>
-                <details className="mt-2">
-                  <summary className="cursor-pointer select-none font-medium">
-                    Media Terpercaya
-                  </summary>
-                  <ul className="list-disc ml-5 mt-1 space-y-1">
-                    <li>Antara, Kompas, Tempo, Bisnis, Detik, dan lainnya</li>
-                  </ul>
-                </details>
-              </div>
-            </Card>
-
-            <Card dark={darkMode}>
-              <SectionHeader
-                icon={
-                  <span
-                    className={classNames(
-                      "w-2.5 h-2.5 rounded-full inline-block",
-                      darkMode ? "bg-amber-400" : "bg-amber-500"
-                    )}
-                  />
-                }
-                title="Pedoman Editorial Singkat"
-              />
-              <details>
-                <summary className="cursor-pointer select-none font-medium">
-                  Lihat pedoman
-                </summary>
-                <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
-                  <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
-                  <li>Sertakan tanggal dan tautan sumber pada caption.</li>
-                  <li>Gunakan foto atau visual resmi atau berlisensi.</li>
-                </ol>
-              </details>
-            </Card>
-          </div>
-
-          {asideOpen && (
-            <div className="lg:hidden fixed inset-0 z-30">
-              <div
-                className="absolute inset-0 bg-black/30"
-                onClick={() => setAsideOpen(false)}
-              />
-              <div
-                className={classNames(
-                  "absolute right-0 top-0 h-full w-80 max-w-[85%] shadow-xl p-4 overflow-y-auto",
-                  darkMode ? "bg-slate-800" : "bg-white"
-                )}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-semibold">Panel Info</div>
-                  <button onClick={() => setAsideOpen(false)} className="text-sm opacity-80">
-                    Tutup
-                  </button>
-                </div>
-                <Card dark={darkMode}>
-                  <SectionHeader
-                    icon={
-                      <span
-                        className={classNames(
-                          "w-2.5 h-2.5 rounded-full inline-block",
-                          darkMode ? "bg-amber-400" : "bg-amber-500"
-                        )}
-                      />
-                    }
-                    title="Status Ingestor"
-                  />
-                  <ul className="text-sm space-y-2">
-                    <li>
-                      Agenda Resmi: <span className="text-emerald-500 font-medium">OK</span> - 30 menit lalu
-                    </li>
-                    <li>
-                      Media Sosial: <span className="text-emerald-500 font-medium">OK</span> - 28 menit lalu
-                    </li>
-                    <li>
-                      Portal Berita: <span className="text-amber-500 font-medium">Terjadwal</span> - 10 menit lagi
-                    </li>
-                  </ul>
-                </Card>
-                <div className="h-3" />
-                <Card dark={darkMode}>
-                  <SectionHeader
-                    icon={
-                      <span
-                        className={classNames(
-                          "w-2.5 h-2.5 rounded-full inline-block",
-                          darkMode ? "bg-amber-400" : "bg-amber-500"
-                        )}
-                      />
-                    }
-                    title="Sumber (konfigurasi contoh)"
-                  />
-                  <div className="text-sm">
-                    <details open>
-                      <summary className="cursor-pointer select-none font-medium">
-                        Resmi
-                      </summary>
-                      <ul className="list-disc ml-5 mt-1 space-y-1">
-                        <li>Portal Kemenhub (agenda dan siaran pers)</li>
-                        <li>Akun media sosial resmi</li>
-                        <li>Dokumen publik (PDF/RSS bila tersedia)</li>
-                      </ul>
-                    </details>
-                    <details className="mt-2">
-                      <summary className="cursor-pointer select-none font-medium">
-                        Media Terpercaya
-                      </summary>
-                      <ul className="list-disc ml-5 mt-1 space-y-1">
-                        <li>Antara, Kompas, Tempo, Bisnis, Detik, dan lainnya</li>
-                      </ul>
-                    </details>
-                  </div>
-                </Card>
-                <div className="h-3" />
-                <Card dark={darkMode}>
-                  <SectionHeader
-                    icon={
-                      <span
-                        className={classNames(
-                          "w-2.5 h-2.5 rounded-full inline-block",
-                          darkMode ? "bg-amber-400" : "bg-amber-500"
-                        )}
-                      />
-                    }
-                    title="Pedoman Editorial Singkat"
-                  />
-                  <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
-                    <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
-                    <li>Sertakan tanggal dan tautan sumber pada caption.</li>
-                    <li>Gunakan foto atau visual resmi atau berlisensi.</li>
-                  </ol>
-                </Card>
-              </div>
-            </div>
-          )}
-        </aside>
       </main>
 
-      {/* Simple toast (single) */}
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 text-sm px-4 py-3 rounded-lg shadow-lg text-white bg-slate-900">
           {toast}
@@ -1294,7 +1110,7 @@ export default function DashboardPrototype() {
 
       <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">
         Data Mode: {dataMode}
-        {lastSync ? ` • Last sync ${lastSync} WIB` : ""} — News LIVE via RSS. (Events & Quotes mock sementara)
+        {lastSync ? ` • Last sync ${lastSync} WIB` : ""} — News LIVE via RSS (Google News + media nasional).
       </footer>
     </div>
   );
