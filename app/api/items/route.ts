@@ -70,7 +70,7 @@ function unwrapGoogleNewsLink(href: string | undefined): string {
   if (!href) return "";
   try {
     const u = new URL(href);
-    const direct = u.searchParams.get("url"); // Google News RSS kerap menyertakan 'url'
+    const direct = u.searchParams.get("url");
     if (direct) return direct;
   } catch {}
   return href;
@@ -91,15 +91,12 @@ function sourceFromLink(href: string): string {
 }
 
 // ---------- FEEDS ----------
-// Google News (bahasa Indonesia), 7 hari, query Menhub/Kemenhub
 const GN_MAIN =
   "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%20OR%20%22Dudy%20Purwagandhi%22%29+when:7d&hl=id&gl=ID&ceid=ID:id";
 
-// Google News khusus domain resmi Kemenhub (events/siaran pers)
 const GN_DEPHUB =
   "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%29+site:dephub.go.id+OR+site:kemenhub.go.id+OR+site:hubud.kemenhub.go.id+when:30d&hl=id&gl=ID&ceid=ID:id";
 
-// RSS media nasional (ringkas; masih bisa ditambah)
 const ANTARA_TOP = "https://www.antaranews.com/rss/top-news";
 const DETIK_BERITA = "https://news.detik.com/berita/rss";
 const KOMPAS_ROOT = "https://rss.kompas.com/";
@@ -202,7 +199,7 @@ export async function GET(req: Request) {
   ]);
 
   // Normalisasi -> News
-  let news = uniqBy(
+  const news = uniqBy(
     [
       ...mapToNews(gn),
       ...mapToNews(ant),
@@ -212,13 +209,13 @@ export async function GET(req: Request) {
   ).sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
 
   // Events dari domain Kemenhub
-  let events = uniqBy(mapToNews(gnDept))
+  const events = uniqBy(mapToNews(gnDept))
     .filter((n) => new Date(n.publishedAt) >= cutoff)
     .map(toEvent)
     .sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
   // Quotes dari News
-  let quotes = news
+  const quotes = news
     .map(extractQuote)
     .filter((q): q is QuoteOut => Boolean(q))
     .slice(0, 20);
