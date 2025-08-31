@@ -385,11 +385,9 @@ export default function DashboardPrototype() {
       setTimeout(() => setToast(""), 1800);
       return;
     }
-    const base = `Menhub: ${
-      (top as any).title || "Pembaruan kegiatan hari ini"
-    } - ${
-      (top as any).summary || (top as any).source || "Info terbaru"
-    }. #Kemenhub #Transportasi`;
+    const title = top.title ?? "Pembaruan kegiatan hari ini";
+    const info = top.summary ?? top.source ?? "Info terbaru";
+    const base = `Menhub: ${title} - ${info}. #Kemenhub #Transportasi`;
     setCaption(base);
     setToast("Caption dibuat");
     setTimeout(() => setToast(""), 1500);
