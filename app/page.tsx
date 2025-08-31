@@ -1,19 +1,12 @@
-"use client";
+'use client';
 import React, { useMemo, useState } from "react";
 
 // =============================
-// Command Center Kemenhub - LIVE-first UI
-// Tailwind CSS required.
+// Command Center Kemenhub - LIVE UI
+// TailwindCSS diaktifkan. ASCII-only di JSX.
 // =============================
 
-// --- Sample seed data (mock) ---
-const NOW = new Date();
-const daysAgo = (n: number) => {
-  const d = new Date(NOW);
-  d.setDate(d.getDate() - n);
-  return d;
-};
-
+// ---------- Types ----------
 type EventItem = {
   id: string;
   title: string;
@@ -46,121 +39,148 @@ type QuoteItem = {
   tags?: string[];
 };
 
-type CombinedItem = EventItem | NewsItem | QuoteItem;
-
+// ---------- Mock minimal sebagai cadangan ----------
 const sampleEvents: EventItem[] = [
   {
-    id: "evt-001",
-    title: "Rapat Koordinasi Keselamatan Pelayaran",
-    date: daysAgo(0).toISOString(),
-    location: "Kemenhub, Jakarta",
+    id: "evt-mock-1",
+    title: "Contoh Event: Rapat Koordinasi",
+    date: new Date().toISOString(),
+    location: "Jakarta",
     attendedByMinister: true,
     source: "dephub.go.id",
-    tags: ["Keselamatan", "Laut"],
-    summary:
-      "Menhub memimpin rakor dan menekankan zero accident di jalur pelayaran utama.",
-    link: "#",
-  },
-  {
-    id: "evt-002",
-    title: "Peresmian Terminal Tipe A",
-    date: daysAgo(2).toISOString(),
-    location: "Makassar, Sulsel",
-    attendedByMinister: true,
-    source: "IG @kemenhub151",
-    tags: ["Darat", "Infrastruktur"],
-    summary:
-      "Peresmian terminal baru untuk meningkatkan konektivitas antarkota di Sulawesi.",
-    link: "https://www.dephub.go.id/",
-  },
-  {
-    id: "evt-003",
-    title: "Diskusi Publik: Green Transportation",
-    date: daysAgo(5).toISOString(),
-    location: "Bandung, Jabar",
-    attendedByMinister: false,
-    source: "Siarkanews",
-    tags: ["Green", "Kebijakan"],
-    summary:
-      "Staf ahli Kemenhub mewakili Menhub membahas roadmap transportasi rendah emisi.",
+    tags: ["Agenda"],
+    summary: "Contoh data untuk fallback bila data live kosong.",
     link: "#",
   },
 ];
 
 const sampleNews: NewsItem[] = [
   {
-    id: "news-101",
-    title:
-      "Menhub Dorong Integrasi Moda untuk Kurangi Kemacetan di Metropolitan",
-    source: "Antara",
-    publishedAt: daysAgo(0).toISOString(),
-    link: "https://www.antaranews.com/",
-    summary:
-      "Dalam keterangan pers, Menhub menyoroti pentingnya integrasi antarmoda dan tiket terusan.",
-    entities: ["Menteri Perhubungan", "Integrasi Moda", "Kemacetan"],
-  },
-  {
-    id: "news-102",
-    title: "Kemenhub Keluarkan Aturan Baru Keselamatan Penerbangan",
-    source: "Kompas",
-    publishedAt: daysAgo(1).toISOString(),
+    id: "news-mock-1",
+    title: "Contoh Berita: Inisiatif Integrasi Moda",
+    source: "contoh.id",
+    publishedAt: new Date().toISOString(),
     link: "#",
-    summary:
-      "Regulasi baru menekankan audit berkala dan peningkatan pelatihan bagi maskapai.",
-    entities: ["Kemenhub", "Penerbangan", "Regulasi"],
-  },
-  {
-    id: "news-103",
-    title: "Uji Coba Bus Listrik di 3 Kota Besar Diperluas",
-    source: "Tempo",
-    publishedAt: daysAgo(4).toISOString(),
-    link: "#",
-    summary:
-      "Pilot project bus listrik memasuki fase pengembangan infrastruktur pengisian daya.",
-    entities: ["Bus Listrik", "Perkotaan", "Emisi"],
+    summary: "Contoh data fallback.",
+    entities: ["Menhub"],
   },
 ];
 
 const sampleQuotes: QuoteItem[] = [
   {
-    id: "q-01",
-    text:
-      "Keselamatan adalah prioritas utama - tidak boleh ada kompromi di darat, laut, maupun udara.",
+    id: "q-mock-1",
+    text: "Contoh kutipan untuk fallback.",
     speaker: "Menteri Perhubungan",
-    date: daysAgo(0).toISOString(),
-    context:
-      "Pernyataan di rapat koordinasi keselamatan pelayaran, Jakarta.",
+    date: new Date().toISOString(),
+    context: "Contoh",
     link: "#",
-    tags: ["Keselamatan", "Kebijakan"],
-  },
-  {
-    id: "q-02",
-    text:
-      "Integrasi antarmoda bukan pilihan, melainkan kebutuhan kota-kota besar Indonesia.",
-    speaker: "Menteri Perhubungan",
-    date: daysAgo(1).toISOString(),
-    context:
-      "Keterangan pers mengenai integrasi moda di wilayah metropolitan.",
-    link: "https://www.dephub.go.id/",
-    tags: ["Integrasi Moda", "Perkotaan"],
-  },
-  {
-    id: "q-03",
-    text:
-      "Transisi ke transportasi rendah emisi harus disertai skema pendanaan yang berkelanjutan.",
-    speaker: "Menteri Perhubungan",
-    date: daysAgo(6).toISOString(),
-    context: "Diskusi publik tentang green transportation.",
-    link: "#",
-    tags: ["Green", "Pendanaan"],
+    tags: ["Kutipan"],
   },
 ];
 
-// Utilities
-const formatDate = (iso: string) => new Date(iso).toLocaleString();
+// ---------- Utils ----------
 const classNames = (...c: Array<string | false | undefined>) =>
   c.filter(Boolean).join(" ");
+const formatDateTime = (iso: string) =>
+  new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
 
+// Filters
+function getMinDate(key: "24h" | "7d" | "30d" | "90d") {
+  const d = new Date();
+  const map: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
+  d.setDate(d.getDate() - (map[key] ?? 7));
+  return d;
+}
+
+function filterEvents(
+  data: EventItem[],
+  {
+    minDate,
+    onlyMinister,
+    tag,
+    query,
+  }: { minDate: Date; onlyMinister: boolean; tag: string; query: string }
+) {
+  return data
+    .filter((e) => new Date(e.date) >= minDate)
+    .filter((e) => (onlyMinister ? e.attendedByMinister : true))
+    .filter((e) => (tag === "All" ? true : (e.tags || []).includes(tag)))
+    .filter((e) => {
+      if (!query) return true;
+      const hay = [
+        e.title,
+        e.location,
+        e.summary || "",
+        e.source,
+        ...(e.tags || []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+}
+
+function filterNews(
+  data: NewsItem[],
+  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
+) {
+  return data
+    .filter((n) => new Date(n.publishedAt) >= minDate)
+    .filter((n) => (tag === "All" ? true : (n.entities || []).includes(tag)))
+    .filter((n) => {
+      if (!query) return true;
+      const hay = [n.title, n.summary || "", n.source, ...(n.entities || [])]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+}
+
+function filterQuotes(
+  data: QuoteItem[],
+  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
+) {
+  return data
+    .filter((q) => new Date(q.date) >= minDate)
+    .filter((q) => (tag === "All" ? true : (q.tags || []).includes(tag)))
+    .filter((q) => {
+      if (!query) return true;
+      const hay = [q.text, q.context || "", q.speaker, ...(q.tags || [])]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+}
+
+// Clipboard helper (fallback friendly)
+async function copyToClipboard(text: string) {
+  try {
+    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------- Reusable UI ----------
 function SectionHeader({
   icon,
   title,
@@ -234,103 +254,10 @@ function Empty({ msg }: { msg: string }) {
   );
 }
 
-// Filters
-function getMinDate(key: "24h" | "7d" | "30d" | "90d") {
-  const d = new Date();
-  const map: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
-  d.setDate(d.getDate() - (map[key] ?? 7));
-  return d;
-}
-
-function filterEvents(
-  data: EventItem[],
-  {
-    minDate,
-    onlyMinister,
-    tag,
-    query,
-  }: { minDate: Date; onlyMinister: boolean; tag: string; query: string }
-) {
-  return data
-    .filter((e) => new Date(e.date) >= minDate)
-    .filter((e) => (onlyMinister ? e.attendedByMinister : true))
-    .filter((e) => (tag === "All" ? true : (e.tags || []).includes(tag)))
-    .filter((e) => {
-      if (!query) return true;
-      const hay = [
-        e.title,
-        e.location,
-        e.summary,
-        e.source,
-        ...(e.tags || []),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
-}
-
-function filterNews(
-  data: NewsItem[],
-  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
-) {
-  return data
-    .filter((n) => new Date(n.publishedAt) >= minDate)
-    .filter((n) => (tag === "All" ? true : (n.entities || []).includes(tag)))
-    .filter((n) => {
-      if (!query) return true;
-      const hay = [n.title, n.summary, n.source, ...(n.entities || [])]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
-}
-
-function filterQuotes(
-  data: QuoteItem[],
-  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
-) {
-  return data
-    .filter((q) => new Date(q.date) >= minDate)
-    .filter((q) => (tag === "All" ? true : (q.tags || []).includes(tag)))
-    .filter((q) => {
-      if (!query) return true;
-      const hay = [q.text, q.context, q.speaker, ...(q.tags || [])]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
-}
-
-// Clipboard helper
-async function copyToClipboard(text: string) {
-  try {
-    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {}
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.top = "-1000px";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export default function DashboardPrototype() {
+// =============================
+// PAGE
+// =============================
+export default function DashboardPage() {
   const [tab, setTab] = useState<"overview" | "events" | "news" | "quotes">(
     "overview"
   );
@@ -346,110 +273,99 @@ export default function DashboardPrototype() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
-  // LIVE data states
+  // LIVE stores
   const [liveNews, setLiveNews] = useState<NewsItem[]>([]);
   const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
   const [liveQuotes, setLiveQuotes] = useState<QuoteItem[]>([]);
   const [dataMode, setDataMode] = useState<"LIVE" | "MOCK">("MOCK");
   const [lastSync, setLastSync] = useState<string>("");
 
-  // Ambil data LIVE fokus Menhub/Kemenhub
+  const minDate = useMemo(() => getMinDate(timeFilter), [timeFilter]);
+
+  // Fetch LIVE dari /api/items
   React.useEffect(() => {
     let mounted = true;
+
     (async () => {
       try {
-        const res = await fetch(
-          "/api/items?types=news,events,quotes&q=menhub,budi karya sumadi,kementerian perhubungan,kemenhub",
-          { cache: "no-store" }
-        );
+        const map: Record<string, number> = {
+          "24h": 1,
+          "7d": 7,
+          "30d": 30,
+          "90d": 90,
+        };
+        const dd = map[timeFilter] ?? 7;
+
+        // Coba langsung types=all, sinceDays dari pilihan
+        const url = `/api/items?types=news,events,quotes&sinceDays=${dd}`;
+        const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error("bad status");
-        const json = await res.json();
+        const json = (await res.json()) as {
+          news: NewsItem[];
+          events: EventItem[];
+          quotes: QuoteItem[];
+        };
+
         if (!mounted) return;
 
-        // set hasil (meski kosong)
-        setLiveNews(Array.isArray(json.news) ? (json.news as NewsItem[]) : []);
-        setLiveEvents(
-          Array.isArray(json.events) ? (json.events as EventItem[]) : []
-        );
-        setLiveQuotes(
-          Array.isArray(json.quotes) ? (json.quotes as QuoteItem[]) : []
-        );
+        // Simpan
+        setLiveNews(Array.isArray(json.news) ? json.news : []);
+        setLiveEvents(Array.isArray(json.events) ? json.events : []);
+        setLiveQuotes(Array.isArray(json.quotes) ? json.quotes : []);
 
-        // TANDAI SELALU LIVE JIKA FETCH BERHASIL
-        setDataMode("LIVE");
+        const anyLive =
+          (json.news && json.news.length > 0) ||
+          (json.events && json.events.length > 0) ||
+          (json.quotes && json.quotes.length > 0);
+
+        setDataMode(anyLive ? "LIVE" : "MOCK");
         setLastSync(
           new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
         );
       } catch {
         if (!mounted) return;
-        // Jika total error (network/server), baru fallback ke MOCK
         setDataMode("MOCK");
         setLiveNews([]);
         setLiveEvents([]);
         setLiveQuotes([]);
       }
     })();
+
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [timeFilter]);
 
-  const minDate = useMemo(() => getMinDate(timeFilter), [timeFilter]);
+  // Sumber per-seksi (fallback jika live kosong)
+  const sourceEvents = liveEvents.length > 0 ? liveEvents : sampleEvents;
+  const sourceNews = liveNews.length > 0 ? liveNews : sampleNews;
+  const sourceQuotes = liveQuotes.length > 0 ? liveQuotes : sampleQuotes;
 
+  // Tag universe (gabungan dari sumber aktif)
   const tagsUniverse = useMemo(() => {
     const set = new Set<string>(["All"]);
-    const all: CombinedItem[] = [
-      ...(dataMode === "LIVE" ? liveEvents : sampleEvents),
-      ...(dataMode === "LIVE" ? liveNews : sampleNews),
-      ...(dataMode === "LIVE" ? liveQuotes : sampleQuotes),
-    ];
-    all.forEach((it) => {
-      if ("tags" in it && Array.isArray((it as EventItem | QuoteItem).tags)) {
-        (it as EventItem | QuoteItem).tags!.forEach((t) => set.add(t));
-      }
-      if ("entities" in (it as NewsItem) && Array.isArray((it as NewsItem).entities)) {
-        (it as NewsItem).entities!.forEach((t) => set.add(t));
-      }
-    });
+    sourceEvents.forEach((e) => (e.tags || []).forEach((t) => set.add(t)));
+    sourceNews.forEach((n) => (n.entities || []).forEach((t) => set.add(t)));
+    sourceQuotes.forEach((q) => (q.tags || []).forEach((t) => set.add(t)));
     return [...set];
-  }, [liveEvents, liveNews, liveQuotes, dataMode]);
+  }, [sourceEvents, sourceNews, sourceQuotes]);
 
-  // Gunakan LIVE bila dataMode === LIVE (meski kosong), selain itu pakai mock
-  const sourceEvents = dataMode === "LIVE" ? liveEvents : sampleEvents;
-  const sourceNews = dataMode === "LIVE" ? liveNews : sampleNews;
-  const sourceQuotes = dataMode === "LIVE" ? liveQuotes : sampleQuotes;
-
+  // Filter view
   const filteredEvents = useMemo(
-    () =>
-      filterEvents(sourceEvents, {
-        minDate,
-        onlyMinister,
-        tag,
-        query,
-      }),
+    () => filterEvents(sourceEvents, { minDate, onlyMinister, tag, query }),
     [minDate, onlyMinister, tag, query, sourceEvents]
   );
   const filteredNews = useMemo(
-    () =>
-      filterNews(sourceNews, {
-        minDate,
-        tag,
-        query,
-      }),
+    () => filterNews(sourceNews, { minDate, tag, query }),
     [minDate, tag, query, sourceNews]
   );
   const filteredQuotes = useMemo(
-    () =>
-      filterQuotes(sourceQuotes, {
-        minDate,
-        tag,
-        query,
-      }),
+    () => filterQuotes(sourceQuotes, { minDate, tag, query }),
     [minDate, tag, query, sourceQuotes]
   );
 
   const handleGenerateCaption = () => {
-    const top: EventItem | NewsItem | undefined =
+    const top: NewsItem | EventItem | undefined =
       (filteredNews[0] as NewsItem | undefined) ||
       (filteredEvents[0] as EventItem | undefined);
     if (!top) {
@@ -457,13 +373,13 @@ export default function DashboardPrototype() {
       setTimeout(() => setToast(""), 1800);
       return;
     }
-    const title = top.title ?? "Pembaruan kegiatan hari ini";
+    const title = (top as NewsItem).title || (top as EventItem).title;
     const info =
-      "summary" in top && top.summary
-        ? (top as NewsItem).summary!
-        : "source" in top
-        ? (top as NewsItem).source
-        : "Info terbaru";
+      (top as NewsItem).summary ||
+      (top as EventItem).summary ||
+      (top as NewsItem).source ||
+      (top as EventItem).source ||
+      "Info terbaru";
     const base = `Menhub: ${title} - ${info}. #Kemenhub #Transportasi`;
     setCaption(base);
     setToast("Caption dibuat");
@@ -473,11 +389,9 @@ export default function DashboardPrototype() {
   const handleCopy = async () => {
     if (!caption) return;
     const ok = await copyToClipboard(caption);
-    if (ok) {
-      setToast("Caption disalin ke clipboard");
-    } else {
-      setToast("Gagal menyalin clipboard. Pilih teks lalu Ctrl/Cmd+C.");
-    }
+    setToast(
+      ok ? "Caption disalin ke clipboard" : "Gagal menyalin. Pilih teks lalu Ctrl/Cmd+C."
+    );
     setTimeout(() => setToast(""), 1800);
   };
 
@@ -523,6 +437,7 @@ export default function DashboardPrototype() {
           : "bg-gradient-to-br from-indigo-50 via-white to-amber-50 text-slate-900"
       )}
     >
+      {/* Theme toggle */}
       <button
         onClick={() => setDarkMode(!darkMode)}
         className={classNames(
@@ -535,6 +450,7 @@ export default function DashboardPrototype() {
         {darkMode ? "Light Mode" : "Dark Mode"}
       </button>
 
+      {/* Top bar */}
       <header
         className={classNames(
           "sticky top-0 z-20 border-b backdrop-blur",
@@ -556,22 +472,7 @@ export default function DashboardPrototype() {
             <div>
               <div className="font-semibold">Command Center Kemenhub</div>
               <div className="text-xs opacity-70">
-                Internal - Prototype UI
-                <span
-                  className={
-                    "ml-2 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide border " +
-                    (dataMode === "LIVE"
-                      ? darkMode
-                        ? "bg-emerald-900/40 border-emerald-500 text-emerald-300"
-                        : "bg-emerald-50 border-emerald-600 text-emerald-700"
-                      : darkMode
-                      ? "bg-slate-700 border-slate-500 text-slate-200"
-                      : "bg-slate-100 border-slate-400 text-slate-700")
-                  }
-                >
-                  Data: {dataMode}
-                  {lastSync ? ` • Last sync ${lastSync}` : ""}
-                </span>
+                Data: {dataMode} {lastSync ? `• Last sync ${lastSync}` : ""}
               </div>
             </div>
           </div>
@@ -628,8 +529,11 @@ export default function DashboardPrototype() {
         </div>
       </header>
 
+      {/* Body */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-5 grid grid-cols-12 gap-4 sm:gap-6">
+        {/* Main */}
         <section className="col-span-12 lg:col-span-8 space-y-4 sm:space-y-6">
+          {/* Filter bar */}
           <Card dark={darkMode}>
             <div className="flex flex-col md:flex-row md:flex-wrap items-start md:items-center gap-3">
               <div className="font-medium">Filter:</div>
@@ -665,6 +569,7 @@ export default function DashboardPrototype() {
             </div>
           </Card>
 
+          {/* Overview */}
           {tab === "overview" && (
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <Card dark={darkMode}>
@@ -677,7 +582,7 @@ export default function DashboardPrototype() {
                       )}
                     />
                   }
-                  title="Events Terbaru"
+                  title={`Events Terbaru (${liveEvents.length > 0 ? "LIVE" : "MOCK"})`}
                   right={
                     <button
                       className={classNames(
@@ -696,7 +601,7 @@ export default function DashboardPrototype() {
                   {filteredEvents.slice(0, 4).map((e) => (
                     <div key={e.id} className="flex gap-3">
                       <div className="w-14 text-xs opacity-70">
-                        {new Date(e.date).toLocaleDateString()}
+                        {new Date(e.date).toLocaleDateString("id-ID")}
                       </div>
                       <div className="flex-1">
                         <div className="font-medium">{e.title}</div>
@@ -723,7 +628,7 @@ export default function DashboardPrototype() {
                       )}
                     />
                   }
-                  title="News Ringkas"
+                  title={`News Ringkas (${liveNews.length > 0 ? "LIVE" : "MOCK"})`}
                   right={
                     <button
                       className={classNames(
@@ -742,7 +647,7 @@ export default function DashboardPrototype() {
                   {filteredNews.slice(0, 4).map((n) => (
                     <div key={n.id} className="flex gap-3">
                       <div className="w-14 text-xs opacity-70">
-                        {new Date(n.publishedAt).toLocaleDateString()}
+                        {new Date(n.publishedAt).toLocaleDateString("id-ID")}
                       </div>
                       <div className="flex-1">
                         <div className="font-medium">{n.title}</div>
@@ -767,7 +672,7 @@ export default function DashboardPrototype() {
                       )}
                     />
                   }
-                  title="Quotes Terkini"
+                  title={`Quotes Terkini (${liveQuotes.length > 0 ? "LIVE" : "MOCK"})`}
                   right={
                     <button
                       className={classNames(
@@ -794,7 +699,7 @@ export default function DashboardPrototype() {
                       <div className="italic">&quot;{q.text}&quot;</div>
                       <div className="text-sm opacity-80">- {q.speaker}</div>
                       <div className="text-xs opacity-70">
-                        {new Date(q.date).toLocaleDateString()} - {q.context}
+                        {new Date(q.date).toLocaleDateString("id-ID")} - {q.context}
                       </div>
                     </blockquote>
                   ))}
@@ -814,12 +719,11 @@ export default function DashboardPrototype() {
                       )}
                     />
                   }
-                  title="Generator Caption (Manual Stub)"
+                  title="Generator Caption"
                 />
                 <div className="space-y-2">
                   <div className="text-sm opacity-80">
-                    Ambil item teratas dari News atau Events setelah filter, lalu buat
-                    caption cepat.
+                    Ambil item teratas dari News/Events (setelah filter) dan buat caption cepat.
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -864,6 +768,7 @@ export default function DashboardPrototype() {
             </div>
           )}
 
+          {/* Tab: Events */}
           {tab === "events" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -892,7 +797,7 @@ export default function DashboardPrototype() {
                     className="py-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4"
                   >
                     <div className="sm:w-40 text-xs opacity-70">
-                      {formatDate(e.date)}
+                      {formatDateTime(e.date)}
                     </div>
                     <div className="flex-1">
                       <div className="font-medium">{e.title}</div>
@@ -951,6 +856,7 @@ export default function DashboardPrototype() {
             </Card>
           )}
 
+          {/* Tab: News */}
           {tab === "news" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -979,7 +885,7 @@ export default function DashboardPrototype() {
                     className="py-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4"
                   >
                     <div className="sm:w-40 text-xs opacity-70">
-                      {formatDate(n.publishedAt)}
+                      {formatDateTime(n.publishedAt)}
                     </div>
                     <div className="flex-1">
                       <div className="font-medium">{n.title}</div>
@@ -1031,6 +937,7 @@ export default function DashboardPrototype() {
             </Card>
           )}
 
+          {/* Tab: Quotes */}
           {tab === "quotes" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -1053,10 +960,12 @@ export default function DashboardPrototype() {
                 {filteredQuotes.map((q) => (
                   <Card key={q.id} dark={darkMode}>
                     <blockquote>
-                      <div className="italic text-base md:text-lg">&quot;{q.text}&quot;</div>
+                      <div className="italic text-base md:text-lg">
+                        &quot;{q.text}&quot;
+                      </div>
                       <div className="text-sm opacity-80">- {q.speaker}</div>
                       <div className="text-xs opacity-70">
-                        {new Date(q.date).toLocaleDateString()} - {q.context}
+                        {new Date(q.date).toLocaleDateString("id-ID")} - {q.context}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {q.tags?.map((t) => (
@@ -1100,8 +1009,263 @@ export default function DashboardPrototype() {
             </Card>
           )}
         </section>
+
+        {/* Aside */}
+        <aside className="col-span-12 lg:col-span-4 space-y-4 sm:space-y-6 lg:sticky lg:top-20 self-start">
+          <div className="hidden lg:block">
+            <Card dark={darkMode}>
+              <SectionHeader
+                icon={
+                  <span
+                    className={classNames(
+                      "w-2.5 h-2.5 rounded-full inline-block",
+                      darkMode ? "bg-amber-400" : "bg-amber-500"
+                    )}
+                  />
+                }
+                title="Status Ingestor"
+              />
+              <ul className="text-sm space-y-2">
+                <li>
+                  Google News:{" "}
+                  <span className="text-emerald-500 font-medium">OK</span>
+                </li>
+                <li>
+                  Media Nasional (Antara/Detik/Kompas):{" "}
+                  <span className="text-emerald-500 font-medium">OK</span>
+                </li>
+                <li>
+                  Domain Resmi (dephub/kemenhub):{" "}
+                  <span className="text-amber-500 font-medium">Filter</span>
+                </li>
+              </ul>
+            </Card>
+
+            <Card dark={darkMode}>
+              <SectionHeader
+                icon={
+                  <span
+                    className={classNames(
+                      "w-2.5 h-2.5 rounded-full inline-block",
+                      darkMode ? "bg-amber-400" : "bg-amber-500"
+                    )}
+                  />
+                }
+                title="Sumber (konfigurasi contoh)"
+              />
+              <div className="text-sm">
+                <details open>
+                  <summary className="cursor-pointer select-none font-medium">
+                    Resmi
+                  </summary>
+                  <ul className="list-disc ml-5 mt-1 space-y-1">
+                    <li>dephub.go.id, kemenhub.go.id, hubud.kemenhub.go.id</li>
+                    <li>Google News dengan site filter</li>
+                  </ul>
+                </details>
+                <details className="mt-2">
+                  <summary className="cursor-pointer select-none font-medium">
+                    Media Terpercaya
+                  </summary>
+                  <ul className="list-disc ml-5 mt-1 space-y-1">
+                    <li>Antara, Kompas, Detik (RSS umum)</li>
+                  </ul>
+                </details>
+              </div>
+            </Card>
+
+            <Card dark={darkMode}>
+              <SectionHeader
+                icon={
+                  <span
+                    className={classNames(
+                      "w-2.5 h-2.5 rounded-full inline-block",
+                      darkMode ? "bg-amber-400" : "bg-amber-500"
+                    )}
+                  />
+                }
+                title="Pedoman Editorial Singkat"
+              />
+              <details>
+                <summary className="cursor-pointer select-none font-medium">
+                  Lihat pedoman
+                </summary>
+                <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
+                  <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
+                  <li>Sertakan tanggal dan tautan sumber pada caption.</li>
+                  <li>Gunakan foto/visual resmi atau berlisensi.</li>
+                </ol>
+              </details>
+            </Card>
+          </div>
+
+          {/* Mobile slide-over */}
+          {asideOpen && (
+            <div className="lg:hidden fixed inset-0 z-30">
+              <div
+                className="absolute inset-0 bg-black/30"
+                onClick={() => setAsideOpen(false)}
+              />
+              <div
+                className={classNames(
+                  "absolute right-0 top-0 h-full w-80 max-w-[85%] shadow-xl p-4 overflow-y-auto",
+                  darkMode ? "bg-slate-800" : "bg-white"
+                )}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-semibold">Panel Info</div>
+                  <button onClick={() => setAsideOpen(false)} className="text-sm opacity-80">
+                    Tutup
+                  </button>
+                </div>
+                <Card dark={darkMode}>
+                  <SectionHeader
+                    icon={
+                      <span
+                        className={classNames(
+                          "w-2.5 h-2.5 rounded-full inline-block",
+                          darkMode ? "bg-amber-400" : "bg-amber-500"
+                        )}
+                      />
+                    }
+                    title="Status Ingestor"
+                  />
+                  <ul className="text-sm space-y-2">
+                    <li>
+                      Google News:{" "}
+                      <span className="text-emerald-500 font-medium">OK</span>
+                    </li>
+                    <li>
+                      Media Nasional (Antara/Detik/Kompas):{" "}
+                      <span className="text-emerald-500 font-medium">OK</span>
+                    </li>
+                    <li>
+                      Domain Resmi (dephub/kemenhub):{" "}
+                      <span className="text-amber-500 font-medium">Filter</span>
+                    </li>
+                  </ul>
+                </Card>
+                <div className="h-3" />
+                <Card dark={darkMode}>
+                  <SectionHeader
+                    icon={
+                      <span
+                        className={classNames(
+                          "w-2.5 h-2.5 rounded-full inline-block",
+                          darkMode ? "bg-amber-400" : "bg-amber-500"
+                        )}
+                      />
+                    }
+                    title="Sumber (konfigurasi contoh)"
+                  />
+                  <div className="text-sm">
+                    <details open>
+                      <summary className="cursor-pointer select-none font-medium">
+                        Resmi
+                      </summary>
+                      <ul className="list-disc ml-5 mt-1 space-y-1">
+                        <li>dephub.go.id, kemenhub.go.id, hubud.kemenhub.go.id</li>
+                        <li>Google News dengan site filter</li>
+                      </ul>
+                    </details>
+                    <details className="mt-2">
+                      <summary className="cursor-pointer select-none font-medium">
+                        Media Terpercaya
+                      </summary>
+                      <ul className="list-disc ml-5 mt-1 space-y-1">
+                        <li>Antara, Kompas, Detik (RSS umum)</li>
+                      </ul>
+                    </details>
+                  </div>
+                </Card>
+                <div className="h-3" />
+                <Card dark={darkMode}>
+                  <SectionHeader
+                    icon={
+                      <span
+                        className={classNames(
+                          "w-2.5 h-2.5 rounded-full inline-block",
+                          darkMode ? "bg-amber-400" : "bg-amber-500"
+                        )}
+                      />
+                    }
+                    title="Pedoman Editorial Singkat"
+                  />
+                  <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
+                    <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
+                    <li>Sertakan tanggal dan tautan sumber pada caption.</li>
+                    <li>Gunakan foto/visual resmi atau berlisensi.</li>
+                  </ol>
+                </Card>
+              </div>
+            </div>
+          )}
+        </aside>
       </main>
 
+      {/* Tag Panel */}
+      {tagsOpen && (
+        <div className="fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setTagsOpen(false)} />
+          <div
+            className={classNames(
+              "absolute right-0 top-0 h-full w-96 max-w-[90%] shadow-2xl p-4 overflow-y-auto",
+              darkMode ? "bg-slate-800" : "bg-white"
+            )}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="font-semibold">Panel Tag</div>
+                <div className="text-xs opacity-70">
+                  Pilih satu untuk filter atau reset ke All
+                </div>
+              </div>
+              <button onClick={() => setTagsOpen(false)} className="text-sm opacity-80">
+                Tutup
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {tagsUniverse.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    setTag(t);
+                    setTagsOpen(false);
+                  }}
+                  className={classNames(
+                    "px-3 py-2 rounded-xl border text-sm",
+                    t === tag
+                      ? darkMode
+                        ? "bg-indigo-500 text-white border-indigo-500"
+                        : "bg-indigo-600 text-white border-indigo-600"
+                      : darkMode
+                      ? "bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+                      : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                  )}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4">
+              <button
+                onClick={() => {
+                  setTag("All");
+                  setTagsOpen(false);
+                }}
+                className={classNames(
+                  "px-3 py-2 rounded-xl border text-sm",
+                  darkMode ? "bg-slate-800 border-slate-600" : "bg-white border-slate-300 hover:bg-slate-50"
+                )}
+              >
+                Reset ke All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
       {toast && (
         <div className="fixed bottom-4 right-4 z-50 text-sm px-4 py-3 rounded-lg shadow-lg text-white bg-slate-900">
           {toast}
@@ -1109,8 +1273,7 @@ export default function DashboardPrototype() {
       )}
 
       <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">
-        Data Mode: {dataMode}
-        {lastSync ? ` • Last sync ${lastSync} WIB` : ""} — News LIVE via RSS (Google News + media nasional).
+        Prototype UI • LIVE via Google News + RSS media. Sempurnakan dengan whitelist domain resmi.
       </footer>
     </div>
   );

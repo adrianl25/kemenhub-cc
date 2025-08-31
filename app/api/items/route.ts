@@ -1,14 +1,16 @@
 // app/api/items/route.ts
-export const runtime = "nodejs";
-export const revalidate = 60; // cache 60 detik di edge/cache
-export const dynamic = "force-dynamic";
+// LIVE aggregator Menhub/Kemenhub via RSS (Google News + media nasional).
+// Next.js App Router (Route Handler). Cache sisi server 60 detik.
 
 import Parser from "rss-parser";
 
-// ===== Types =====
-type RSSItem = {
+export const revalidate = 60;
+
+// ---------- Types ----------
+type RawItem = {
   title?: string;
   link?: string;
+  isoDate?: string;
   pubDate?: string;
   contentSnippet?: string;
 };
@@ -23,178 +25,212 @@ type NewsOut = {
   entities?: string[];
 };
 
-type ItemsResponse = {
-  news: NewsOut[];
-  events: never[];
-  quotes: never[];
+type EventOut = {
+  id: string;
+  title: string;
+  date: string; // ISO
+  location: string;
+  attendedByMinister: boolean;
+  source: string;
+  tags?: string[];
+  summary?: string;
+  link: string;
 };
 
-// ===== Sumber RSS =====
-// Media nasional (umum)
-const CORE_FEEDS: string[] = [
-  "https://www.antaranews.com/rss/terkini.xml",
-  "https://rss.kompas.com/nasional",
-  "https://www.tempo.co/rss/nasional",
-];
+type QuoteOut = {
+  id: string;
+  text: string;
+  speaker: string;
+  date: string; // ISO
+  context?: string;
+  link: string;
+  tags?: string[];
+};
 
-// Google News RSS pencarian spesifik (lebih “tajam” untuk Menhub/Kemenhub)
-const GN_BASE =
-  "https://news.google.com/rss/search?hl=id&gl=ID&ceid=ID:id&q=";
-// NB: encodeURIComponent penting untuk query yang mengandung spasi/quote
-const GOOGLE_NEWS_QUERIES: string[] = [
-  'Menhub OR "Menteri Perhubungan"',
-  '"Budi Karya Sumadi"',
-  '"Kementerian Perhubungan" OR Kemenhub',
-];
+const parser = new Parser({
+  timeout: 10000,
+  headers: { "user-agent": "kemenhub-cc/1.0" },
+});
 
-const GOOGLE_NEWS_FEEDS = GOOGLE_NEWS_QUERIES.map(
-  (q) => `${GN_BASE}${encodeURIComponent(q)}`
-);
-
-// ===== Kata kunci default =====
-const KEYWORDS_DEFAULT: string[] = [
+// ---------- Kata kunci (relevansi) ----------
+const KW = [
   "menhub",
   "menteri perhubungan",
-  "budi karya sumadi",
-  "kementerian perhubungan",
   "kemenhub",
+  "kementerian perhubungan",
+  "dudy purwagandhi",
 ];
 
-// ===== Utils =====
-function domainOf(url: string): string {
+function looksRelevant(title = "", snippet = "", source = ""): boolean {
+  const hay = `${title} ${snippet} ${source}`.toLowerCase();
+  return KW.some((k) => hay.includes(k));
+}
+
+function unwrapGoogleNewsLink(href: string | undefined): string {
+  if (!href) return "";
   try {
-    return new URL(url).hostname.replace(/^www\./, "");
+    const u = new URL(href);
+    const direct = u.searchParams.get("url"); // Google News RSS kerap menyertakan 'url'
+    if (direct) return direct;
+  } catch {}
+  return href;
+}
+
+function normDate(d?: string): string {
+  const iso = d ? new Date(d) : new Date();
+  return new Date(iso).toISOString();
+}
+
+function sourceFromLink(href: string): string {
+  try {
+    const u = new URL(href);
+    return u.hostname.replace(/^www\./, "");
   } catch {
     return "unknown";
   }
 }
-function isValidDate(d: Date): boolean {
-  return !Number.isNaN(+d);
-}
-function matchKeywords(textA = "", textB = "", keywords: string[]): boolean {
-  const a = textA.toLowerCase();
-  const b = textB.toLowerCase();
-  return keywords.some((k) => {
-    const kk = k.toLowerCase();
-    return a.includes(kk) || b.includes(kk);
-  });
-}
-const byDateDesc = (a: { publishedAt: string }, b: { publishedAt: string }) =>
-  +new Date(b.publishedAt) - +new Date(a.publishedAt);
 
-async function fetchAndParseFeed(url: string, parser: Parser<RSSItem>) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Kemenhub-CommandCenter/1.0 (+https://vercel.com) Node.js",
-      Accept: "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
-    },
-    redirect: "follow",
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`Fetch ${url} status ${res.status}`);
-  const xml = await res.text();
-  const feed = await parser.parseString(xml);
-  return feed;
+// ---------- FEEDS ----------
+// Google News (bahasa Indonesia), 7 hari, query Menhub/Kemenhub
+const GN_MAIN =
+  "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%20OR%20%22Dudy%20Purwagandhi%22%29+when:7d&hl=id&gl=ID&ceid=ID:id";
+
+// Google News khusus domain resmi Kemenhub (events/siaran pers)
+const GN_DEPHUB =
+  "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%29+site:dephub.go.id+OR+site:kemenhub.go.id+OR+site:hubud.kemenhub.go.id+when:30d&hl=id&gl=ID&ceid=ID:id";
+
+// RSS media nasional (ringkas; masih bisa ditambah)
+const ANTARA_TOP = "https://www.antaranews.com/rss/top-news";
+const DETIK_BERITA = "https://news.detik.com/berita/rss";
+const KOMPAS_ROOT = "https://rss.kompas.com/";
+
+// ---------- Helpers ----------
+async function grab(feedUrl: string): Promise<RawItem[]> {
+  try {
+    const res = await fetch(feedUrl, { cache: "no-store" });
+    const xml = await res.text();
+    const out = await parser.parseString(xml);
+    return ((out as unknown as { items?: RawItem[] }).items ?? []) as RawItem[];
+  } catch {
+    return [];
+  }
 }
 
-async function loadNewsFromFeeds(
-  keywords: string[],
-  allowFallback: boolean,
-  fallbackCount: number
-): Promise<NewsOut[]> {
-  const parser = new Parser<RSSItem>();
+function mapToNews(items: RawItem[]): NewsOut[] {
+  return items
+    .map((it, idx) => {
+      const link = unwrapGoogleNewsLink(it.link);
+      const title = (it.title || "").trim();
+      const summary = (it.contentSnippet || "").trim();
+      return {
+        id: `news-${(it.isoDate || it.pubDate || "")}-${idx}`,
+        title,
+        source: sourceFromLink(link),
+        publishedAt: normDate(it.isoDate || it.pubDate),
+        link,
+        summary,
+        entities: ["Menteri Perhubungan"],
+      };
+    })
+    .filter((n) => looksRelevant(n.title, n.summary, n.source));
+}
+
+function uniqBy<T extends { link: string }>(arr: T[]): T[] {
   const seen = new Set<string>();
-  const hits: NewsOut[] = [];
-  const raw: NewsOut[] = [];
-
-  // 1) Baca feed inti (media nasional)
-  const FEEDS = [...CORE_FEEDS];
-
-  // 2) Tambahkan feed Google News (pencarian langsung “Menhub/Kemenhub”)
-  FEEDS.push(...GOOGLE_NEWS_FEEDS);
-
-  for (const feedUrl of FEEDS) {
-    try {
-      const feed = await fetchAndParseFeed(feedUrl, parser);
-      const source = domainOf(feedUrl);
-      const items = feed.items ?? [];
-
-      for (const it of items) {
-        const title = it.title ?? "";
-        const link = it.link ?? "";
-        const published = it.pubDate ? new Date(it.pubDate) : undefined;
-        if (!link || !published || !isValidDate(published)) continue;
-
-        const id = `${source}#${link}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-
-        const base: NewsOut = {
-          id,
-          title: title || "(tanpa judul)",
-          source,
-          publishedAt: published.toISOString(),
-          link,
-          summary: it.contentSnippet ?? "",
-          entities: [],
-        };
-
-        raw.push(base);
-        if (matchKeywords(title, it.contentSnippet ?? "", keywords)) {
-          hits.push(base);
-        }
-      }
-    } catch {
-      // kalau satu feed error, lanjut feed lain
-      continue;
+  const out: T[] = [];
+  for (const a of arr) {
+    const k = a.link || "";
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(a);
     }
   }
-
-  // urutkan terbaru
-  hits.sort(byDateDesc);
-  raw.sort(byDateDesc);
-
-  if (hits.length > 0) return hits;
-  if (!allowFallback) return []; // tetap kosong supaya UI jujur (tidak “ngarang”)
-
-  // fallback: ambil berita umum terbaru agar UI bisa menampilkan sesuatu untuk uji
-  return raw.slice(0, fallbackCount);
+  return out;
 }
 
-export async function GET(req: Request): Promise<Response> {
-  const url = new URL(req.url);
+function toEvent(n: NewsOut): EventOut {
+  return {
+    id: `evt-${n.id}`,
+    title: n.title,
+    date: n.publishedAt,
+    location: "Indonesia",
+    attendedByMinister: true,
+    source: n.source,
+    tags: ["Agenda", "Menhub"],
+    summary: n.summary,
+    link: n.link,
+  };
+}
 
-  // ?q=menhub,kemenhub (override keywords)
-  const q = url.searchParams.get("q");
-  const keywords = q
-    ? q
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : KEYWORDS_DEFAULT;
+function extractQuote(n: NewsOut): QuoteOut | null {
+  const textSrc = `${n.title}. ${n.summary ?? ""}`;
+  const m =
+    textSrc.match(/"([^"]{10,200})"/) || textSrc.match(/“([^”]{10,200})”/);
+  if (!m) return null;
+  const text = m[1].trim();
+  return {
+    id: `q-${n.id}`,
+    text,
+    speaker: "Menteri Perhubungan",
+    date: n.publishedAt,
+    context: n.source,
+    link: n.link,
+    tags: ["Kutipan", "Menhub"],
+  };
+}
 
-  // ?fallback=1 untuk menyalakan fallback berita umum (default: off)
-  const allowFallback = url.searchParams.get("fallback") === "1";
-
-  // ?limit=15 untuk batas jumlah fallback
-  const fallbackCount = Math.max(
+// ---------- Handler ----------
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const typesRaw = (searchParams.get("types") || "news,events,quotes")
+    .split(",")
+    .map((s) => s.trim().toLowerCase());
+  const sinceDays = Math.max(
     1,
-    Math.min(50, Number(url.searchParams.get("limit") ?? 15))
+    Math.min(90, Number(searchParams.get("sinceDays")) || 7)
   );
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - sinceDays);
 
-  const news = await loadNewsFromFeeds(keywords, allowFallback, fallbackCount);
+  // Ambil feed paralel
+  const [gn, gnDept, ant, detik, kompas] = await Promise.all([
+    grab(GN_MAIN),
+    grab(GN_DEPHUB),
+    grab(ANTARA_TOP),
+    grab(DETIK_BERITA),
+    grab(KOMPAS_ROOT),
+  ]);
 
-  const body: ItemsResponse = {
-    news,
-    events: [],
-    quotes: [],
+  // Normalisasi -> News
+  let news = uniqBy(
+    [
+      ...mapToNews(gn),
+      ...mapToNews(ant),
+      ...mapToNews(detik),
+      ...mapToNews(kompas),
+    ].filter((n) => new Date(n.publishedAt) >= cutoff)
+  ).sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+
+  // Events dari domain Kemenhub
+  let events = uniqBy(mapToNews(gnDept))
+    .filter((n) => new Date(n.publishedAt) >= cutoff)
+    .map(toEvent)
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+
+  // Quotes dari News
+  let quotes = news
+    .map(extractQuote)
+    .filter((q): q is QuoteOut => Boolean(q))
+    .slice(0, 20);
+
+  const payload = {
+    news: typesRaw.includes("news") ? news : [],
+    events: typesRaw.includes("events") ? events : [],
+    quotes: typesRaw.includes("quotes") ? quotes : [],
   };
 
-  return new Response(JSON.stringify(body, null, 2), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "s-maxage=60, stale-while-revalidate=300",
-    },
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
   });
 }
