@@ -1,6 +1,6 @@
 // app/api/items/route.ts
 // LIVE aggregator Menhub/Kemenhub via RSS (Google News + media nasional).
-// Next.js App Router (Route Handler). Cache sisi server 60 detik.
+// Memperbaiki ekstraksi "Kutipan Penting" dengan heuristik bahasa Indonesia.
 
 import Parser from "rss-parser";
 
@@ -61,6 +61,25 @@ const KW = [
   "dudy purwagandhi",
 ];
 
+// Verba ujaran (bhs Indonesia umum di berita)
+const SPEECH_VERBS = [
+  "kata",
+  "ujar",
+  "ucap",
+  "sebut",
+  "tutur",
+  "jelas",
+  "terang",
+  "tegas",
+  "ungkap",
+  "papar",
+  "menurut",
+  "menyatakan",
+  "mengatakan",
+  "menegaskan",
+  "menyebut",
+];
+
 function looksRelevant(title = "", snippet = "", source = ""): boolean {
   const hay = `${title} ${snippet} ${source}`.toLowerCase();
   return KW.some((k) => hay.includes(k));
@@ -90,6 +109,20 @@ function sourceFromLink(href: string): string {
   }
 }
 
+// Decode kecil-kecilan utk entity umum
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&lsquo;|&rsquo;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ");
+}
+
+function normalizeQuotes(s: string): string {
+  return s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+}
+
 // ---------- FEEDS ----------
 const GN_MAIN =
   "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%20OR%20%22Dudy%20Purwagandhi%22%29+when:7d&hl=id&gl=ID&ceid=ID:id";
@@ -117,8 +150,10 @@ function mapToNews(items: RawItem[]): NewsOut[] {
   return items
     .map((it, idx) => {
       const link = unwrapGoogleNewsLink(it.link);
-      const title = (it.title || "").trim();
-      const summary = (it.contentSnippet || "").trim();
+      const title = normalizeQuotes(decodeEntities((it.title || "").trim()));
+      const summary = normalizeQuotes(
+        decodeEntities((it.contentSnippet || "").trim())
+      );
       return {
         id: `news-${(it.isoDate || it.pubDate || "")}-${idx}`,
         title,
@@ -159,21 +194,84 @@ function toEvent(n: NewsOut): EventOut {
   };
 }
 
+// --------- Ekstraksi Kutipan ---------
+function pickQuotedSegments(text: string): string[] {
+  // Ambil isi dalam tanda petik "..."
+  const out: string[] = [];
+  const re = /"([^"]{10,240})"/g; // 10..240 char
+  let m: RegExpExecArray | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((m = re.exec(text)) !== null) {
+    out.push(m[1].trim());
+  }
+  return out;
+}
+
+function splitSentences(text: string): string[] {
+  // Pemisah sederhana: titik/koma panjang dan tanda tanya/seru
+  // Hindari memotong angka/desimal singkat — cukup kasar sudah cukup untuk ringkasan RSS
+  return text
+    .split(/(?<=[\.\?\!])\s+|—|\u2014/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function looksLikeSpeechSentence(s: string): boolean {
+  const low = s.toLowerCase();
+  const hasMenhub =
+    low.includes("menhub") || low.includes("menteri perhubungan");
+  const hasVerb = SPEECH_VERBS.some((v) => low.includes(` ${v} `) || low.startsWith(`${v} `));
+  return hasMenhub && hasVerb;
+}
+
+function clampQuoteLen(s: string): string | null {
+  const t = s.trim();
+  if (t.length < 10) return null;
+  if (t.length > 240) {
+    // coba potong di batas kalimat
+    const idx = t.indexOf(". ");
+    if (idx > 80 && idx < 240) return t.slice(0, idx + 1);
+    return t.slice(0, 240);
+  }
+  return t;
+}
+
 function extractQuote(n: NewsOut): QuoteOut | null {
   const textSrc = `${n.title}. ${n.summary ?? ""}`;
-  const m =
-    textSrc.match(/"([^"]{10,200})"/) || textSrc.match(/“([^”]{10,200})”/);
-  if (!m) return null;
-  const text = m[1].trim();
-  return {
-    id: `q-${n.id}`,
-    text,
-    speaker: "Menteri Perhubungan",
-    date: n.publishedAt,
-    context: n.source,
-    link: n.link,
-    tags: ["Kutipan", "Menhub"],
-  };
+  const clean = normalizeQuotes(decodeEntities(textSrc));
+
+  // 1) Prioritas isi tanda petik
+  const quoted = pickQuotedSegments(clean)
+    .map(clampQuoteLen)
+    .filter((x): x is string => Boolean(x));
+  if (quoted.length > 0) {
+    return {
+      id: `q-${n.id}`,
+      text: quoted[0],
+      speaker: "Menteri Perhubungan",
+      date: n.publishedAt,
+      context: n.source,
+      link: n.link,
+      tags: ["Kutipan", "Menhub"],
+    };
+  }
+
+  // 2) Fallback: kalimat dengan pola "ujar/menurut/menegaskan ... Menhub"
+  const cand = splitSentences(clean).find((s) => looksLikeSpeechSentence(s));
+  const clipped = cand ? clampQuoteLen(cand) : null;
+  if (clipped) {
+    return {
+      id: `q-${n.id}`,
+      text: clipped,
+      speaker: "Menteri Perhubungan",
+      date: n.publishedAt,
+      context: n.source,
+      link: n.link,
+      tags: ["Parafrasa", "Menhub"],
+    };
+  }
+
+  return null;
 }
 
 // ---------- Handler ----------
@@ -214,10 +312,12 @@ export async function GET(req: Request) {
     .map(toEvent)
     .sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
-  // Quotes dari News
+  // Quotes dari News (top 20)
   const quotes = news
     .map(extractQuote)
     .filter((q): q is QuoteOut => Boolean(q))
+    // de-dupe by text
+    .filter((q, idx, arr) => arr.findIndex((z) => z.text === q.text) === idx)
     .slice(0, 20);
 
   const payload = {
