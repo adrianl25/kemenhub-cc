@@ -46,6 +46,17 @@ type ItemsOut = {
   };
 };
 
+// Representasi minimal sebuah item RSS, TANPA any
+type GenericItem = Record<string, unknown> & {
+  title?: string;
+  link?: string;
+  content?: string;
+  contentSnippet?: string;
+  summary?: string;
+  isoDate?: string;
+  pubDate?: string;
+};
+
 // ===== Helpers =====
 function toISO(d: Date | number | string): string {
   const date = d instanceof Date ? d : new Date(d);
@@ -136,15 +147,19 @@ function extractQuoteFromText(text: string): string | null {
   return chosen ? chosen.trim() : null;
 }
 
-function getItemDate(item: unknown): Date {
-  const it = item as { isoDate?: string; pubDate?: string; "dc:date"?: string };
-  const raw =
-    it?.isoDate ||
-    it?.pubDate ||
-    (it && (it as Record<string, string>)["dc:date"]) ||
-    "";
+function getItemDate(item: GenericItem): Date {
+  const dcDate =
+    typeof (item as Record<string, unknown>)["dc:date"] === "string"
+      ? ((item as Record<string, unknown>)["dc:date"] as string)
+      : "";
+  const raw = item.isoDate || item.pubDate || dcDate || "";
   const d = new Date(raw);
   return isNaN(d.getTime()) ? new Date() : d;
+}
+
+function getString(obj: Record<string, unknown>, key: string): string {
+  const v = obj[key];
+  return typeof v === "string" ? v : "";
 }
 
 async function parseFeed(
@@ -159,28 +174,27 @@ async function parseFeed(
   if (!res.ok) return { news, quotes };
 
   const xml = await res.text();
-  const out = await parser.parseString(xml);
+  // Hindari any: gunakan output generik
+  const out = (await parser.parseString(xml)) as Parser.Output<GenericItem>;
+  const items: GenericItem[] = Array.isArray(out.items) ? (out.items as GenericItem[]) : [];
 
-  const items = Array.isArray(out.items) ? out.items : [];
   for (const item of items) {
+    const record = item as Record<string, unknown>;
     const title = typeof item.title === "string" ? item.title.trim() : "";
     const link = typeof item.link === "string" ? item.link.trim() : "";
     const contentRaw =
       (typeof item.content === "string" ? item.content : "") ||
-      (typeof (item as any)["content:encoded"] === "string"
-        ? ((item as any)["content:encoded"] as string)
-        : "") ||
-      (typeof (item as any).contentSnippet === "string"
-        ? ((item as any).contentSnippet as string)
-        : "") ||
-      (typeof (item as any).summary === "string"
-        ? ((item as any).summary as string)
-        : "") ||
+      getString(record, "content:encoded") ||
+      (typeof item.contentSnippet === "string" ? item.contentSnippet : "") ||
+      (typeof item.summary === "string" ? item.summary : "") ||
       "";
     const summary = stripHtml(contentRaw);
 
     const dt = getItemDate(item);
     if (dt < since) continue;
+
+    const combined = `${title} ${summary}`;
+    const entities = extractEntities(combined);
 
     const n: NewsItem = {
       id: `${feed.name}-${dt.getTime()}-${title.slice(0, 24)}`,
@@ -189,13 +203,13 @@ async function parseFeed(
       publishedAt: toISO(dt),
       link: link || "#",
       summary: summary.slice(0, 400),
-      entities: extractEntities(`${title} ${summary}`),
+      entities,
     };
     news.push(n);
 
     const qText = extractQuoteFromText(`${title}. ${summary}`);
     if (qText) {
-      const ents = Array.isArray(n.entities) ? n.entities : []; // <<--- FIX di sini
+      const ents = Array.isArray(entities) ? entities : [];
       const q: QuoteItem = {
         id: `${n.id}-q`,
         text: qText,
@@ -203,7 +217,7 @@ async function parseFeed(
         date: n.publishedAt,
         context: n.title,
         link: n.link,
-        tags: ["Kutipan", ...ents], // aman untuk spread
+        tags: ["Kutipan", ...ents],
       };
       quotes.push(q);
     }
@@ -236,7 +250,7 @@ export async function GET(req: Request): Promise<Response> {
 
   const newsAll: NewsItem[] = [];
   const quotesAll: QuoteItem[] = [];
-  const eventsAll: EventItem[] = []; // TODO: feed agenda resmi
+  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi jika tersedia RSS
 
   await Promise.all(
     FEEDS.map(async (f) => {
@@ -245,7 +259,7 @@ export async function GET(req: Request): Promise<Response> {
         newsAll.push(...news);
         quotesAll.push(...quotes);
       } catch {
-        // lanjut feed berikutnya
+        // lanjut ke feed berikutnya
       }
     })
   );
