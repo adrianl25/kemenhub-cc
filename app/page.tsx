@@ -1,12 +1,7 @@
-'use client';
-import React, { useMemo, useState } from "react";
+"use client";
+import React, { useEffect, useMemo, useState } from "react";
 
-// =============================
-// Command Center Kemenhub - LIVE UI
-// TailwindCSS diaktifkan. ASCII-only di JSX.
-// =============================
-
-// ---------- Types ----------
+// ===== Types =====
 type EventItem = {
   id: string;
   title: string;
@@ -39,148 +34,64 @@ type QuoteItem = {
   tags?: string[];
 };
 
-// ---------- Mock minimal sebagai cadangan ----------
+type CombinedItem = EventItem | NewsItem | QuoteItem;
+type TimeKey = "24h" | "7d" | "30d" | "90d";
+
+// ===== Dummy fallback saat belum fetch =====
+const NOW = new Date();
+const daysAgo = (n: number) => {
+  const d = new Date(NOW);
+  d.setDate(d.getDate() - n);
+  return d;
+};
+
 const sampleEvents: EventItem[] = [
   {
-    id: "evt-mock-1",
-    title: "Contoh Event: Rapat Koordinasi",
-    date: new Date().toISOString(),
-    location: "Jakarta",
+    id: "evt-001",
+    title: "Rapat Koordinasi Keselamatan Pelayaran",
+    date: daysAgo(0).toISOString(),
+    location: "Kemenhub, Jakarta",
     attendedByMinister: true,
     source: "dephub.go.id",
-    tags: ["Agenda"],
-    summary: "Contoh data untuk fallback bila data live kosong.",
+    tags: ["Keselamatan", "Laut"],
+    summary:
+      "Menhub memimpin rakor dan menekankan zero accident di jalur pelayaran utama.",
     link: "#",
   },
 ];
 
 const sampleNews: NewsItem[] = [
   {
-    id: "news-mock-1",
-    title: "Contoh Berita: Inisiatif Integrasi Moda",
-    source: "contoh.id",
-    publishedAt: new Date().toISOString(),
+    id: "news-101",
+    title:
+      "Menhub Dorong Integrasi Moda untuk Kurangi Kemacetan di Metropolitan",
+    source: "Antara",
+    publishedAt: daysAgo(0).toISOString(),
     link: "#",
-    summary: "Contoh data fallback.",
-    entities: ["Menhub"],
+    summary:
+      "Dalam keterangan pers, Menhub menyoroti pentingnya integrasi antarmoda dan tiket terusan.",
+    entities: ["Menteri Perhubungan", "Integrasi Moda", "Kemacetan"],
   },
 ];
 
 const sampleQuotes: QuoteItem[] = [
   {
-    id: "q-mock-1",
-    text: "Contoh kutipan untuk fallback.",
+    id: "q-01",
+    text:
+      "Keselamatan adalah prioritas utama - tidak boleh ada kompromi di darat, laut, maupun udara.",
     speaker: "Menteri Perhubungan",
-    date: new Date().toISOString(),
-    context: "Contoh",
+    date: daysAgo(0).toISOString(),
+    context: "Rakor keselamatan pelayaran",
     link: "#",
-    tags: ["Kutipan"],
+    tags: ["Keselamatan", "Kebijakan"],
   },
 ];
 
-// ---------- Utils ----------
+// ===== Utils =====
 const classNames = (...c: Array<string | false | undefined>) =>
   c.filter(Boolean).join(" ");
-const formatDateTime = (iso: string) =>
-  new Date(iso).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
-// Filters
-function getMinDate(key: "24h" | "7d" | "30d" | "90d") {
-  const d = new Date();
-  const map: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
-  d.setDate(d.getDate() - (map[key] ?? 7));
-  return d;
-}
-
-function filterEvents(
-  data: EventItem[],
-  {
-    minDate,
-    onlyMinister,
-    tag,
-    query,
-  }: { minDate: Date; onlyMinister: boolean; tag: string; query: string }
-) {
-  return data
-    .filter((e) => new Date(e.date) >= minDate)
-    .filter((e) => (onlyMinister ? e.attendedByMinister : true))
-    .filter((e) => (tag === "All" ? true : (e.tags || []).includes(tag)))
-    .filter((e) => {
-      if (!query) return true;
-      const hay = [
-        e.title,
-        e.location,
-        e.summary || "",
-        e.source,
-        ...(e.tags || []),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
-}
-
-function filterNews(
-  data: NewsItem[],
-  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
-) {
-  return data
-    .filter((n) => new Date(n.publishedAt) >= minDate)
-    .filter((n) => (tag === "All" ? true : (n.entities || []).includes(tag)))
-    .filter((n) => {
-      if (!query) return true;
-      const hay = [n.title, n.summary || "", n.source, ...(n.entities || [])]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
-}
-
-function filterQuotes(
-  data: QuoteItem[],
-  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
-) {
-  return data
-    .filter((q) => new Date(q.date) >= minDate)
-    .filter((q) => (tag === "All" ? true : (q.tags || []).includes(tag)))
-    .filter((q) => {
-      if (!query) return true;
-      const hay = [q.text, q.context || "", q.speaker, ...(q.tags || [])]
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(query.toLowerCase());
-    })
-    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
-}
-
-// Clipboard helper (fallback friendly)
-async function copyToClipboard(text: string) {
-  try {
-    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {}
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.top = "-1000px";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ---------- Reusable UI ----------
 function SectionHeader({
   icon,
   title,
@@ -254,18 +165,105 @@ function Empty({ msg }: { msg: string }) {
   );
 }
 
-// =============================
-// PAGE
-// =============================
-export default function DashboardPage() {
+// ===== Filter helpers =====
+function getMinDate(key: TimeKey) {
+  const d = new Date();
+  const map: Record<TimeKey, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
+  d.setDate(d.getDate() - (map[key] ?? 7));
+  return d;
+}
+
+function filterEvents(
+  data: EventItem[],
+  {
+    minDate,
+    onlyMinister,
+    tag,
+    query,
+  }: { minDate: Date; onlyMinister: boolean; tag: string; query: string }
+) {
+  return data
+    .filter((e) => new Date(e.date) >= minDate)
+    .filter((e) => (onlyMinister ? e.attendedByMinister : true))
+    .filter((e) => (tag === "All" ? true : (e.tags || []).includes(tag)))
+    .filter((e) => {
+      if (!query) return true;
+      const hay = [e.title, e.location, e.summary, e.source, ...(e.tags || [])]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+}
+
+function filterNews(
+  data: NewsItem[],
+  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
+) {
+  return data
+    .filter((n) => new Date(n.publishedAt) >= minDate)
+    .filter((n) => (tag === "All" ? true : (n.entities || []).includes(tag)))
+    .filter((n) => {
+      if (!query) return true;
+      const hay = [n.title, n.summary, n.source, ...(n.entities || [])]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+}
+
+function filterQuotes(
+  data: QuoteItem[],
+  { minDate, tag, query }: { minDate: Date; tag: string; query: string }
+) {
+  return data
+    .filter((q) => new Date(q.date) >= minDate)
+    .filter((q) => (tag === "All" ? true : (q.tags || []).includes(tag)))
+    .filter((q) => {
+      if (!query) return true;
+      const hay = [q.text, q.context, q.speaker, ...(q.tags || [])]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(query.toLowerCase());
+    })
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+}
+
+// ===== Clipboard =====
+async function copyToClipboard(text: string) {
+  try {
+    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ===== Page Component =====
+export default function DashboardPrototype() {
+  // UI state
   const [tab, setTab] = useState<"overview" | "events" | "news" | "quotes">(
     "overview"
   );
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("All");
-  const [timeFilter, setTimeFilter] = useState<"24h" | "7d" | "30d" | "90d">(
-    "7d"
-  );
+  const [timeFilter, setTimeFilter] = useState<TimeKey>("7d");
   const [onlyMinister, setOnlyMinister] = useState(true);
   const [caption, setCaption] = useState("");
   const [toast, setToast] = useState("");
@@ -273,99 +271,100 @@ export default function DashboardPage() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
-  // LIVE stores
-  const [liveNews, setLiveNews] = useState<NewsItem[]>([]);
-  const [liveEvents, setLiveEvents] = useState<EventItem[]>([]);
-  const [liveQuotes, setLiveQuotes] = useState<QuoteItem[]>([]);
-  const [dataMode, setDataMode] = useState<"LIVE" | "MOCK">("MOCK");
-  const [lastSync, setLastSync] = useState<string>("");
+  // LIVE states
+  const [liveNews, setLiveNews] = useState<NewsItem[] | null>(null);
+  const [liveEvents, setLiveEvents] = useState<EventItem[] | null>(null);
+  const [liveQuotes, setLiveQuotes] = useState<QuoteItem[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [autoFetchOnRange, setAutoFetchOnRange] = useState(false);
 
   const minDate = useMemo(() => getMinDate(timeFilter), [timeFilter]);
 
-  // Fetch LIVE dari /api/items
-  React.useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      try {
-        const map: Record<string, number> = {
-          "24h": 1,
-          "7d": 7,
-          "30d": 30,
-          "90d": 90,
-        };
-        const dd = map[timeFilter] ?? 7;
-
-        // Coba langsung types=all, sinceDays dari pilihan
-        const url = `/api/items?types=news,events,quotes&sinceDays=${dd}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error("bad status");
-        const json = (await res.json()) as {
-          news: NewsItem[];
-          events: EventItem[];
-          quotes: QuoteItem[];
-        };
-
-        if (!mounted) return;
-
-        // Simpan
-        setLiveNews(Array.isArray(json.news) ? json.news : []);
-        setLiveEvents(Array.isArray(json.events) ? json.events : []);
-        setLiveQuotes(Array.isArray(json.quotes) ? json.quotes : []);
-
-        const anyLive =
-          (json.news && json.news.length > 0) ||
-          (json.events && json.events.length > 0) ||
-          (json.quotes && json.quotes.length > 0);
-
-        setDataMode(anyLive ? "LIVE" : "MOCK");
-        setLastSync(
-          new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
-        );
-      } catch {
-        if (!mounted) return;
-        setDataMode("MOCK");
-        setLiveNews([]);
-        setLiveEvents([]);
-        setLiveQuotes([]);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, [timeFilter]);
-
-  // Sumber per-seksi (fallback jika live kosong)
-  const sourceEvents = liveEvents.length > 0 ? liveEvents : sampleEvents;
-  const sourceNews = liveNews.length > 0 ? liveNews : sampleNews;
-  const sourceQuotes = liveQuotes.length > 0 ? liveQuotes : sampleQuotes;
-
-  // Tag universe (gabungan dari sumber aktif)
+  // Tag universe dari data aktif
   const tagsUniverse = useMemo(() => {
     const set = new Set<string>(["All"]);
-    sourceEvents.forEach((e) => (e.tags || []).forEach((t) => set.add(t)));
-    sourceNews.forEach((n) => (n.entities || []).forEach((t) => set.add(t)));
-    sourceQuotes.forEach((q) => (q.tags || []).forEach((t) => set.add(t)));
+    const all: CombinedItem[] = [
+      ...((liveEvents ?? sampleEvents) as EventItem[]),
+      ...((liveNews ?? sampleNews) as NewsItem[]),
+      ...((liveQuotes ?? sampleQuotes) as QuoteItem[]),
+    ];
+    all.forEach((it) => {
+      if ((it as EventItem).tags)
+        (it as EventItem).tags!.forEach((t) => set.add(t));
+      if ((it as NewsItem).entities)
+        (it as NewsItem).entities!.forEach((t) => set.add(t));
+      if ((it as QuoteItem).tags)
+        (it as QuoteItem).tags!.forEach((t) => set.add(t));
+    });
     return [...set];
-  }, [sourceEvents, sourceNews, sourceQuotes]);
+  }, [liveEvents, liveNews, liveQuotes]);
 
-  // Filter view
+  // Data aktif
+  const activeEvents = liveEvents ?? sampleEvents;
+  const activeNews = liveNews ?? sampleNews;
+  const activeQuotes = liveQuotes ?? sampleQuotes;
+
   const filteredEvents = useMemo(
-    () => filterEvents(sourceEvents, { minDate, onlyMinister, tag, query }),
-    [minDate, onlyMinister, tag, query, sourceEvents]
+    () => filterEvents(activeEvents, { minDate, onlyMinister, tag, query }),
+    [activeEvents, minDate, onlyMinister, tag, query]
   );
   const filteredNews = useMemo(
-    () => filterNews(sourceNews, { minDate, tag, query }),
-    [minDate, tag, query, sourceNews]
+    () => filterNews(activeNews, { minDate, tag, query }),
+    [activeNews, minDate, tag, query]
   );
   const filteredQuotes = useMemo(
-    () => filterQuotes(sourceQuotes, { minDate, tag, query }),
-    [minDate, tag, query, sourceQuotes]
+    () => filterQuotes(activeQuotes, { minDate, tag, query }),
+    [activeQuotes, minDate, tag, query]
   );
 
+  // Map rentang -> hari
+  const sinceMap: Record<TimeKey, number> = {
+    "24h": 1,
+    "7d": 7,
+    "30d": 30,
+    "90d": 90,
+  };
+
+  // Fetch LIVE
+  async function fetchLive() {
+    setLoading(true);
+    setErrorMsg("");
+    try {
+      const days = sinceMap[timeFilter] ?? 7;
+      const url = `/api/items?types=news,events,quotes&sinceDays=${days}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        news: NewsItem[];
+        events: EventItem[];
+        quotes: QuoteItem[];
+      };
+      setLiveNews(json.news || []);
+      setLiveEvents(json.events || []);
+      setLiveQuotes(json.quotes || []);
+      setToast("Data LIVE diperbarui");
+      setTimeout(() => setToast(""), 1500);
+    } catch (e) {
+      setErrorMsg("Gagal mengambil data. Coba lagi.");
+      setToast("Gagal mengambil data");
+      setTimeout(() => setToast(""), 1500);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Auto fetch saat ganti rentang (opsional)
+  useEffect(() => {
+    if (autoFetchOnRange) {
+      void fetchLive();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeFilter, autoFetchOnRange]);
+
+  // Caption generator
   const handleGenerateCaption = () => {
-    const top: NewsItem | EventItem | undefined =
+    const top: EventItem | NewsItem | undefined =
       (filteredNews[0] as NewsItem | undefined) ||
       (filteredEvents[0] as EventItem | undefined);
     if (!top) {
@@ -373,12 +372,12 @@ export default function DashboardPage() {
       setTimeout(() => setToast(""), 1800);
       return;
     }
-    const title = (top as NewsItem).title || (top as EventItem).title;
+    const title =
+      (top as NewsItem).title ?? (top as EventItem).title ?? "Pembaruan";
     const info =
-      (top as NewsItem).summary ||
-      (top as EventItem).summary ||
-      (top as NewsItem).source ||
-      (top as EventItem).source ||
+      (top as NewsItem).summary ??
+      (top as EventItem).summary ??
+      (top as NewsItem).source ??
       "Info terbaru";
     const base = `Menhub: ${title} - ${info}. #Kemenhub #Transportasi`;
     setCaption(base);
@@ -389,9 +388,7 @@ export default function DashboardPage() {
   const handleCopy = async () => {
     if (!caption) return;
     const ok = await copyToClipboard(caption);
-    setToast(
-      ok ? "Caption disalin ke clipboard" : "Gagal menyalin. Pilih teks lalu Ctrl/Cmd+C."
-    );
+    setToast(ok ? "Caption disalin ke clipboard" : "Gagal menyalin. Pilih teks lalu Ctrl/Cmd+C.");
     setTimeout(() => setToast(""), 1800);
   };
 
@@ -419,8 +416,6 @@ export default function DashboardPage() {
         "px-3 py-2 rounded-full text-sm border transition-colors",
         tab === id
           ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
-          : darkMode
-          ? "bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
           : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
       )}
     >
@@ -437,7 +432,7 @@ export default function DashboardPage() {
           : "bg-gradient-to-br from-indigo-50 via-white to-amber-50 text-slate-900"
       )}
     >
-      {/* Theme toggle */}
+      {/* Toggle theme */}
       <button
         onClick={() => setDarkMode(!darkMode)}
         className={classNames(
@@ -450,7 +445,7 @@ export default function DashboardPage() {
         {darkMode ? "Light Mode" : "Dark Mode"}
       </button>
 
-      {/* Top bar */}
+      {/* Header */}
       <header
         className={classNames(
           "sticky top-0 z-20 border-b backdrop-blur",
@@ -472,7 +467,9 @@ export default function DashboardPage() {
             <div>
               <div className="font-semibold">Command Center Kemenhub</div>
               <div className="text-xs opacity-70">
-                Data: {dataMode} {lastSync ? `• Last sync ${lastSync}` : ""}
+                {liveNews || liveEvents || liveQuotes
+                  ? "Data: LIVE (manual/auto fetch)"
+                  : "Prototype (dummy until fetched)"}
               </div>
             </div>
           </div>
@@ -497,17 +494,41 @@ export default function DashboardPage() {
                   : "border-slate-300 focus:ring-2 focus:ring-indigo-600"
               )}
               value={timeFilter}
-              onChange={(e) =>
-                setTimeFilter(
-                  e.target.value as "24h" | "7d" | "30d" | "90d"
-                )
-              }
+              onChange={(e) => setTimeFilter(e.target.value as TimeKey)}
             >
               <option value="24h">24 jam</option>
               <option value="7d">7 hari</option>
               <option value="30d">30 hari</option>
               <option value="90d">90 hari</option>
             </select>
+
+            {/* Trigger fetch & opsi auto */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => void fetchLive()}
+                disabled={loading}
+                className={classNames(
+                  "px-3 py-2 rounded-xl",
+                  loading
+                    ? "bg-slate-400 text-white"
+                    : darkMode
+                    ? "bg-indigo-500 text-white hover:bg-indigo-600"
+                    : "bg-indigo-700 text-white hover:bg-indigo-800"
+                )}
+                title="Ambil data live sesuai rentang waktu"
+              >
+                {loading ? "Fetching..." : "Ambil Data (Fetch)"}
+              </button>
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={autoFetchOnRange}
+                  onChange={(e) => setAutoFetchOnRange(e.target.checked)}
+                />
+                Auto-fetch saat ganti rentang
+              </label>
+            </div>
+
             <div className="flex flex-wrap gap-2">
               <TabButton id="overview" label="Overview" />
               <TabButton id="events" label="Events" />
@@ -531,13 +552,15 @@ export default function DashboardPage() {
 
       {/* Body */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-5 grid grid-cols-12 gap-4 sm:gap-6">
-        {/* Main */}
+        {/* LEFT */}
         <section className="col-span-12 lg:col-span-8 space-y-4 sm:space-y-6">
-          {/* Filter bar */}
           <Card dark={darkMode}>
             <div className="flex flex-col md:flex-row md:flex-wrap items-start md:items-center gap-3">
               <div className="font-medium">Filter:</div>
-              <Chip active={onlyMinister} onClick={() => setOnlyMinister(!onlyMinister)}>
+              <Chip
+                active={onlyMinister}
+                onClick={() => setOnlyMinister(!onlyMinister)}
+              >
                 Hanya acara dihadiri Menhub {onlyMinister ? "(on)" : "(off)"}
               </Chip>
               <div className="flex items-center gap-2 w-full md:w-auto">
@@ -566,10 +589,10 @@ export default function DashboardPage() {
                   </button>
                 </div>
               </div>
+              {errorMsg && <div className="text-sm text-red-500">{errorMsg}</div>}
             </div>
           </Card>
 
-          {/* Overview */}
           {tab === "overview" && (
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <Card dark={darkMode}>
@@ -582,7 +605,7 @@ export default function DashboardPage() {
                       )}
                     />
                   }
-                  title={`Events Terbaru (${liveEvents.length > 0 ? "LIVE" : "MOCK"})`}
+                  title={`Events Terbaru${liveEvents ? " (LIVE)" : ""}`}
                   right={
                     <button
                       className={classNames(
@@ -601,7 +624,7 @@ export default function DashboardPage() {
                   {filteredEvents.slice(0, 4).map((e) => (
                     <div key={e.id} className="flex gap-3">
                       <div className="w-14 text-xs opacity-70">
-                        {new Date(e.date).toLocaleDateString("id-ID")}
+                        {new Date(e.date).toLocaleDateString()}
                       </div>
                       <div className="flex-1">
                         <div className="font-medium">{e.title}</div>
@@ -613,7 +636,7 @@ export default function DashboardPage() {
                     </div>
                   ))}
                   {filteredEvents.length === 0 && (
-                    <Empty msg="Tidak ada event dalam rentang waktu ini." />
+                    <Empty msg="Tidak ada event dalam rentang ini." />
                   )}
                 </div>
               </Card>
@@ -628,7 +651,7 @@ export default function DashboardPage() {
                       )}
                     />
                   }
-                  title={`News Ringkas (${liveNews.length > 0 ? "LIVE" : "MOCK"})`}
+                  title={`News Ringkas${liveNews ? " (LIVE)" : ""}`}
                   right={
                     <button
                       className={classNames(
@@ -647,7 +670,7 @@ export default function DashboardPage() {
                   {filteredNews.slice(0, 4).map((n) => (
                     <div key={n.id} className="flex gap-3">
                       <div className="w-14 text-xs opacity-70">
-                        {new Date(n.publishedAt).toLocaleDateString("id-ID")}
+                        {new Date(n.publishedAt).toLocaleDateString()}
                       </div>
                       <div className="flex-1">
                         <div className="font-medium">{n.title}</div>
@@ -672,7 +695,7 @@ export default function DashboardPage() {
                       )}
                     />
                   }
-                  title={`Quotes Terkini (${liveQuotes.length > 0 ? "LIVE" : "MOCK"})`}
+                  title={`Quotes Terkini${liveQuotes ? " (LIVE)" : ""}`}
                   right={
                     <button
                       className={classNames(
@@ -699,7 +722,7 @@ export default function DashboardPage() {
                       <div className="italic">&quot;{q.text}&quot;</div>
                       <div className="text-sm opacity-80">- {q.speaker}</div>
                       <div className="text-xs opacity-70">
-                        {new Date(q.date).toLocaleDateString("id-ID")} - {q.context}
+                        {new Date(q.date).toLocaleDateString()} - {q.context}
                       </div>
                     </blockquote>
                   ))}
@@ -723,7 +746,8 @@ export default function DashboardPage() {
                 />
                 <div className="space-y-2">
                   <div className="text-sm opacity-80">
-                    Ambil item teratas dari News/Events (setelah filter) dan buat caption cepat.
+                    Ambil item teratas dari News/Events (sesudah filter) untuk
+                    caption cepat.
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -768,7 +792,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Tab: Events */}
           {tab === "events" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -780,7 +803,7 @@ export default function DashboardPage() {
                     )}
                   />
                 }
-                title="Daftar Events"
+                title={`Daftar Events${liveEvents ? " (LIVE)" : ""}`}
                 right={
                   <div className="text-sm flex items-center gap-2">
                     <StatBadge>{filteredEvents.length} item</StatBadge>
@@ -797,7 +820,7 @@ export default function DashboardPage() {
                     className="py-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4"
                   >
                     <div className="sm:w-40 text-xs opacity-70">
-                      {formatDateTime(e.date)}
+                      {formatDate(e.date)}
                     </div>
                     <div className="flex-1">
                       <div className="font-medium">{e.title}</div>
@@ -856,7 +879,6 @@ export default function DashboardPage() {
             </Card>
           )}
 
-          {/* Tab: News */}
           {tab === "news" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -868,7 +890,7 @@ export default function DashboardPage() {
                     )}
                   />
                 }
-                title="Berita Terbaru"
+                title={`Berita Terbaru${liveNews ? " (LIVE)" : ""}`}
                 right={
                   <div className="text-sm flex items-center gap-2">
                     <StatBadge>{filteredNews.length} item</StatBadge>
@@ -885,7 +907,7 @@ export default function DashboardPage() {
                     className="py-3 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4"
                   >
                     <div className="sm:w-40 text-xs opacity-70">
-                      {formatDateTime(n.publishedAt)}
+                      {formatDate(n.publishedAt)}
                     </div>
                     <div className="flex-1">
                       <div className="font-medium">{n.title}</div>
@@ -937,7 +959,6 @@ export default function DashboardPage() {
             </Card>
           )}
 
-          {/* Tab: Quotes */}
           {tab === "quotes" && (
             <Card dark={darkMode}>
               <SectionHeader
@@ -949,7 +970,7 @@ export default function DashboardPage() {
                     )}
                   />
                 }
-                title="Kutipan Penting"
+                title={`Kutipan Penting${liveQuotes ? " (LIVE)" : ""}`}
                 right={
                   <div className="text-sm flex items-center gap-2">
                     <StatBadge>{filteredQuotes.length} item</StatBadge>
@@ -965,7 +986,7 @@ export default function DashboardPage() {
                       </div>
                       <div className="text-sm opacity-80">- {q.speaker}</div>
                       <div className="text-xs opacity-70">
-                        {new Date(q.date).toLocaleDateString("id-ID")} - {q.context}
+                        {new Date(q.date).toLocaleDateString()} - {q.context}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {q.tags?.map((t) => (
@@ -1010,7 +1031,7 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Aside */}
+        {/* RIGHT / ASIDE */}
         <aside className="col-span-12 lg:col-span-4 space-y-4 sm:space-y-6 lg:sticky lg:top-20 self-start">
           <div className="hidden lg:block">
             <Card dark={darkMode}>
@@ -1027,16 +1048,20 @@ export default function DashboardPage() {
               />
               <ul className="text-sm space-y-2">
                 <li>
-                  Google News:{" "}
-                  <span className="text-emerald-500 font-medium">OK</span>
+                  News/Quotes:{" "}
+                  <span className="text-emerald-500 font-medium">
+                    {liveNews || liveQuotes ? "LIVE" : "Standby"}
+                  </span>{" "}
+                  {loading ? " • fetching..." : ""}
                 </li>
                 <li>
-                  Media Nasional (Antara/Detik/Kompas):{" "}
-                  <span className="text-emerald-500 font-medium">OK</span>
+                  Events:{" "}
+                  <span className="text-amber-500 font-medium">
+                    {liveEvents ? "LIVE" : "Dummy"}
+                  </span>
                 </li>
                 <li>
-                  Domain Resmi (dephub/kemenhub):{" "}
-                  <span className="text-amber-500 font-medium">Filter</span>
+                  Rentang aktif: <span className="font-medium">{timeFilter}</span>
                 </li>
               </ul>
             </Card>
@@ -1059,8 +1084,9 @@ export default function DashboardPage() {
                     Resmi
                   </summary>
                   <ul className="list-disc ml-5 mt-1 space-y-1">
-                    <li>dephub.go.id, kemenhub.go.id, hubud.kemenhub.go.id</li>
-                    <li>Google News dengan site filter</li>
+                    <li>Portal Kemenhub (dephub.go.id & kemenhub.go.id)</li>
+                    <li>Akun media sosial resmi</li>
+                    <li>Dokumen publik (PDF/RSS bila tersedia)</li>
                   </ul>
                 </details>
                 <details className="mt-2">
@@ -1068,7 +1094,7 @@ export default function DashboardPage() {
                     Media Terpercaya
                   </summary>
                   <ul className="list-disc ml-5 mt-1 space-y-1">
-                    <li>Antara, Kompas, Detik (RSS umum)</li>
+                    <li>Antara, Kompas, Tempo, Detik, Bisnis, dan lainnya</li>
                   </ul>
                 </details>
               </div>
@@ -1091,15 +1117,14 @@ export default function DashboardPage() {
                   Lihat pedoman
                 </summary>
                 <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
-                  <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
+                  <li>Verifikasi minimal 2 sumber untuk kutipan langsung.</li>
                   <li>Sertakan tanggal dan tautan sumber pada caption.</li>
-                  <li>Gunakan foto/visual resmi atau berlisensi.</li>
+                  <li>Gunakan visual resmi atau berlisensi.</li>
                 </ol>
               </details>
             </Card>
           </div>
 
-          {/* Mobile slide-over */}
           {asideOpen && (
             <div className="lg:hidden fixed inset-0 z-30">
               <div
@@ -1132,16 +1157,20 @@ export default function DashboardPage() {
                   />
                   <ul className="text-sm space-y-2">
                     <li>
-                      Google News:{" "}
-                      <span className="text-emerald-500 font-medium">OK</span>
+                      News/Quotes:{" "}
+                      <span className="text-emerald-500 font-medium">
+                        {liveNews || liveQuotes ? "LIVE" : "Standby"}
+                      </span>{" "}
+                      {loading ? " • fetching..." : ""}
                     </li>
                     <li>
-                      Media Nasional (Antara/Detik/Kompas):{" "}
-                      <span className="text-emerald-500 font-medium">OK</span>
+                      Events:{" "}
+                      <span className="text-amber-500 font-medium">
+                        {liveEvents ? "LIVE" : "Dummy"}
+                      </span>
                     </li>
                     <li>
-                      Domain Resmi (dephub/kemenhub):{" "}
-                      <span className="text-amber-500 font-medium">Filter</span>
+                      Rentang aktif: <span className="font-medium">{timeFilter}</span>
                     </li>
                   </ul>
                 </Card>
@@ -1164,8 +1193,9 @@ export default function DashboardPage() {
                         Resmi
                       </summary>
                       <ul className="list-disc ml-5 mt-1 space-y-1">
-                        <li>dephub.go.id, kemenhub.go.id, hubud.kemenhub.go.id</li>
-                        <li>Google News dengan site filter</li>
+                        <li>Portal Kemenhub</li>
+                        <li>Media sosial resmi</li>
+                        <li>Dokumen publik (PDF/RSS bila tersedia)</li>
                       </ul>
                     </details>
                     <details className="mt-2">
@@ -1173,7 +1203,7 @@ export default function DashboardPage() {
                         Media Terpercaya
                       </summary>
                       <ul className="list-disc ml-5 mt-1 space-y-1">
-                        <li>Antara, Kompas, Detik (RSS umum)</li>
+                        <li>Antara, Kompas, Tempo, Detik, Bisnis</li>
                       </ul>
                     </details>
                   </div>
@@ -1194,7 +1224,7 @@ export default function DashboardPage() {
                   <ol className="list-decimal ml-5 mt-2 text-sm space-y-1">
                     <li>Verifikasi 2 sumber untuk kutipan langsung.</li>
                     <li>Sertakan tanggal dan tautan sumber pada caption.</li>
-                    <li>Gunakan foto/visual resmi atau berlisensi.</li>
+                    <li>Gunakan visual resmi atau berlisensi.</li>
                   </ol>
                 </Card>
               </div>
@@ -1203,7 +1233,7 @@ export default function DashboardPage() {
         </aside>
       </main>
 
-      {/* Tag Panel */}
+      {/* Panel Tag */}
       {tagsOpen && (
         <div className="fixed inset-0 z-40">
           <div className="absolute inset-0 bg-black/30" onClick={() => setTagsOpen(false)} />
@@ -1235,11 +1265,7 @@ export default function DashboardPage() {
                   className={classNames(
                     "px-3 py-2 rounded-xl border text-sm",
                     t === tag
-                      ? darkMode
-                        ? "bg-indigo-500 text-white border-indigo-500"
-                        : "bg-indigo-600 text-white border-indigo-600"
-                      : darkMode
-                      ? "bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
+                      ? "bg-indigo-600 text-white border-indigo-600"
                       : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
                   )}
                 >
@@ -1253,10 +1279,7 @@ export default function DashboardPage() {
                   setTag("All");
                   setTagsOpen(false);
                 }}
-                className={classNames(
-                  "px-3 py-2 rounded-xl border text-sm",
-                  darkMode ? "bg-slate-800 border-slate-600" : "bg-white border-slate-300 hover:bg-slate-50"
-                )}
+                className="px-3 py-2 rounded-xl border text-sm bg-white border-slate-300 hover:bg-slate-50"
               >
                 Reset ke All
               </button>
@@ -1273,7 +1296,7 @@ export default function DashboardPage() {
       )}
 
       <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">
-        Prototype UI • LIVE via Google News + RSS media. Sempurnakan dengan whitelist domain resmi.
+        Prototype UI — Data LIVE tersedia via tombol <b>Ambil Data (Fetch)</b> atau aktifkan <b>Auto-fetch</b>.
       </footer>
     </div>
   );

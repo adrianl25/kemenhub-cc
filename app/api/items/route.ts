@@ -1,31 +1,10 @@
-// app/api/items/route.ts
-// LIVE aggregator Menhub/Kemenhub via RSS (Google News + media nasional).
-// Memperbaiki ekstraksi "Kutipan Penting" dengan heuristik bahasa Indonesia.
-
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import Parser from "rss-parser";
 
-export const revalidate = 60;
+export const revalidate = 600; // cache 10 menit
 
-// ---------- Types ----------
-type RawItem = {
-  title?: string;
-  link?: string;
-  isoDate?: string;
-  pubDate?: string;
-  contentSnippet?: string;
-};
-
-type NewsOut = {
-  id: string;
-  title: string;
-  source: string;
-  publishedAt: string; // ISO
-  link: string;
-  summary?: string;
-  entities?: string[];
-};
-
-type EventOut = {
+// ===== Types =====
+type EventItem = {
   id: string;
   title: string;
   date: string; // ISO
@@ -37,7 +16,17 @@ type EventOut = {
   link: string;
 };
 
-type QuoteOut = {
+type NewsItem = {
+  id: string;
+  title: string;
+  source: string;
+  publishedAt: string; // ISO
+  link: string;
+  summary?: string;
+  entities?: string[];
+};
+
+type QuoteItem = {
   id: string;
   text: string;
   speaker: string;
@@ -47,286 +36,233 @@ type QuoteOut = {
   tags?: string[];
 };
 
-const parser = new Parser({
-  timeout: 10000,
-  headers: { "user-agent": "kemenhub-cc/1.0" },
-});
+type ItemsOut = {
+  news: NewsItem[];
+  events: EventItem[];
+  quotes: QuoteItem[];
+  meta: {
+    sinceDays: number;
+    fetchedAt: string;
+    sources: string[];
+  };
+};
 
-// ---------- Kata kunci (relevansi) ----------
-const KW = [
-  "menhub",
-  "menteri perhubungan",
-  "kemenhub",
-  "kementerian perhubungan",
-  "dudy purwagandhi",
+// ===== Helpers =====
+function toISO(d: Date | number | string): string {
+  const date = d instanceof Date ? d : new Date(d);
+  return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+function parseNumber(n: string | null, fallback: number): number {
+  if (!n) return fallback;
+  const x = Number(n);
+  if (!isFinite(x) || x <= 0) return fallback;
+  return Math.floor(x);
+}
+
+function getSinceDate(sinceDays: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - sinceDays);
+  return d;
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
+  { name: "Antara", url: "https://www.antaranews.com/rss/terkini" },
+  { name: "Kompas", url: "https://news.kompas.com/rss" },
+  { name: "Tempo", url: "https://rss.tempo.co/tempo" },
+  { name: "Bisnis", url: "https://www.bisnis.com/rss" },
+  { name: "Detik", url: "https://rss.detik.com/index.php/detikNews" },
 ];
 
-// Verba ujaran (bhs Indonesia umum di berita)
-const SPEECH_VERBS = [
-  "kata",
-  "ujar",
-  "ucap",
-  "sebut",
-  "tutur",
-  "jelas",
-  "terang",
-  "tegas",
-  "ungkap",
-  "papar",
-  "menurut",
-  "menyatakan",
-  "mengatakan",
-  "menegaskan",
-  "menyebut",
-];
-
-function looksRelevant(title = "", snippet = "", source = ""): boolean {
-  const hay = `${title} ${snippet} ${source}`.toLowerCase();
-  return KW.some((k) => hay.includes(k));
-}
-
-function unwrapGoogleNewsLink(href: string | undefined): string {
-  if (!href) return "";
+// Timeout fetch (stabil di serverless)
+async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
   try {
-    const u = new URL(href);
-    const direct = u.searchParams.get("url");
-    if (direct) return direct;
-  } catch {}
-  return href;
-}
-
-function normDate(d?: string): string {
-  const iso = d ? new Date(d) : new Date();
-  return new Date(iso).toISOString();
-}
-
-function sourceFromLink(href: string): string {
-  try {
-    const u = new URL(href);
-    return u.hostname.replace(/^www\./, "");
-  } catch {
-    return "unknown";
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 KemenhubCC/1.0 (+https://vercel.app)",
+        accept:
+          "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+      },
+    });
+  } finally {
+    clearTimeout(id);
   }
 }
 
-// Decode kecil-kecilan utk entity umum
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&quot;/g, '"')
-    .replace(/&ldquo;|&rdquo;/g, '"')
-    .replace(/&lsquo;|&rsquo;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/&nbsp;/g, " ");
+function extractEntities(text: string): string[] {
+  const t = text.toLowerCase();
+  const ents: string[] = [];
+  if (t.includes("menhub") || t.includes("menteri perhubungan"))
+    ents.push("Menteri Perhubungan");
+  if (t.includes("kemenhub")) ents.push("Kemenhub");
+  if (t.includes("transportasi")) ents.push("Transportasi");
+  if (t.includes("penerbangan")) ents.push("Penerbangan");
+  if (t.includes("pelabuhan") || t.includes("pelayaran")) ents.push("Laut");
+  if (t.includes("kereta") || t.includes("krl")) ents.push("Kereta");
+  if (t.includes("jalan") || t.includes("terminal") || t.includes("angkot"))
+    ents.push("Darat");
+  return Array.from(new Set(ents));
 }
 
-function normalizeQuotes(s: string): string {
-  return s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+function extractQuoteFromText(text: string): string | null {
+  const candidates: string[] = [];
+  const fancy = /“([^”]{10,300})”/g;
+  const ascii = /"([^"]{10,300})"/g;
+  let m: RegExpExecArray | null;
+  while ((m = fancy.exec(text)) !== null) candidates.push(m[1]);
+  while ((m = ascii.exec(text)) !== null) candidates.push(m[1]);
+
+  if (candidates.length === 0) return null;
+
+  const t = text.toLowerCase();
+  const okContext =
+    t.includes("menhub") ||
+    t.includes("menteri perhubungan") ||
+    t.includes("kemenhub");
+  if (!okContext) return null;
+
+  const chosen = candidates.sort((a, b) => a.length - b.length)[0];
+  return chosen ? chosen.trim() : null;
 }
 
-// ---------- FEEDS ----------
-const GN_MAIN =
-  "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%20OR%20%22Dudy%20Purwagandhi%22%29+when:7d&hl=id&gl=ID&ceid=ID:id";
-
-const GN_DEPHUB =
-  "https://news.google.com/rss/search?q=%28%22Menteri%20Perhubungan%22%20OR%20Menhub%20OR%20Kemenhub%29+site:dephub.go.id+OR+site:kemenhub.go.id+OR+site:hubud.kemenhub.go.id+when:30d&hl=id&gl=ID&ceid=ID:id";
-
-const ANTARA_TOP = "https://www.antaranews.com/rss/top-news";
-const DETIK_BERITA = "https://news.detik.com/berita/rss";
-const KOMPAS_ROOT = "https://rss.kompas.com/";
-
-// ---------- Helpers ----------
-async function grab(feedUrl: string): Promise<RawItem[]> {
-  try {
-    const res = await fetch(feedUrl, { cache: "no-store" });
-    const xml = await res.text();
-    const out = await parser.parseString(xml);
-    return ((out as unknown as { items?: RawItem[] }).items ?? []) as RawItem[];
-  } catch {
-    return [];
-  }
+function getItemDate(item: unknown): Date {
+  const it = item as { isoDate?: string; pubDate?: string; "dc:date"?: string };
+  const raw =
+    it?.isoDate ||
+    it?.pubDate ||
+    (it && (it as Record<string, string>)["dc:date"]) ||
+    "";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? new Date() : d;
 }
 
-function mapToNews(items: RawItem[]): NewsOut[] {
-  return items
-    .map((it, idx) => {
-      const link = unwrapGoogleNewsLink(it.link);
-      const title = normalizeQuotes(decodeEntities((it.title || "").trim()));
-      const summary = normalizeQuotes(
-        decodeEntities((it.contentSnippet || "").trim())
-      );
-      return {
-        id: `news-${(it.isoDate || it.pubDate || "")}-${idx}`,
-        title,
-        source: sourceFromLink(link),
-        publishedAt: normDate(it.isoDate || it.pubDate),
-        link,
-        summary,
-        entities: ["Menteri Perhubungan"],
+async function parseFeed(
+  parser: Parser,
+  feed: { name: string; url: string },
+  since: Date
+): Promise<{ news: NewsItem[]; quotes: QuoteItem[] }> {
+  const news: NewsItem[] = [];
+  const quotes: QuoteItem[] = [];
+
+  const res = await fetchWithTimeout(feed.url, 12000);
+  if (!res.ok) return { news, quotes };
+
+  const xml = await res.text();
+  const out = await parser.parseString(xml);
+
+  const items = Array.isArray(out.items) ? out.items : [];
+  for (const item of items) {
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    const link = typeof item.link === "string" ? item.link.trim() : "";
+    const contentRaw =
+      (typeof item.content === "string" ? item.content : "") ||
+      (typeof item["content:encoded"] === "string"
+        ? (item["content:encoded"] as string)
+        : "") ||
+      (typeof item.contentSnippet === "string" ? item.contentSnippet : "") ||
+      (typeof item.summary === "string" ? item.summary : "") ||
+      "";
+    const summary = stripHtml(contentRaw);
+
+    const dt = getItemDate(item);
+    if (dt < since) continue;
+
+    const n: NewsItem = {
+      id: `${feed.name}-${dt.getTime()}-${title.slice(0, 24)}`,
+      title: title || "(tanpa judul)",
+      source: feed.name,
+      publishedAt: toISO(dt),
+      link: link || "#",
+      summary: summary.slice(0, 400),
+      entities: extractEntities(`${title} ${summary}`),
+    };
+    news.push(n);
+
+    const qText = extractQuoteFromText(`${title}. ${summary}`);
+    if (qText) {
+      const q: QuoteItem = {
+        id: `${n.id}-q`,
+        text: qText,
+        speaker: "Menteri Perhubungan",
+        date: n.publishedAt,
+        context: n.title,
+        link: n.link,
+        tags: ["Kutipan", ...n.entities],
       };
-    })
-    .filter((n) => looksRelevant(n.title, n.summary, n.source));
-}
-
-function uniqBy<T extends { link: string }>(arr: T[]): T[] {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const a of arr) {
-    const k = a.link || "";
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(a);
+      quotes.push(q);
     }
   }
-  return out;
+
+  return { news, quotes };
 }
 
-function toEvent(n: NewsOut): EventOut {
-  return {
-    id: `evt-${n.id}`,
-    title: n.title,
-    date: n.publishedAt,
-    location: "Indonesia",
-    attendedByMinister: true,
-    source: n.source,
-    tags: ["Agenda", "Menhub"],
-    summary: n.summary,
-    link: n.link,
-  };
-}
+// ===== Handler =====
+export async function GET(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const typesParam = url.searchParams.get("types");
+  const sinceParam = url.searchParams.get("sinceDays");
 
-// --------- Ekstraksi Kutipan ---------
-function pickQuotedSegments(text: string): string[] {
-  // Ambil isi dalam tanda petik "..."
-  const out: string[] = [];
-  const re = /"([^"]{10,240})"/g; // 10..240 char
-  let m: RegExpExecArray | null;
-  // eslint-disable-next-line no-cond-assign
-  while ((m = re.exec(text)) !== null) {
-    out.push(m[1].trim());
-  }
-  return out;
-}
+  const types = (typesParam ? typesParam.split(",") : ["news", "quotes"])
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s === "news" || s === "events" || s === "quotes");
 
-function splitSentences(text: string): string[] {
-  // Pemisah sederhana: titik/koma panjang dan tanda tanya/seru
-  // Hindari memotong angka/desimal singkat — cukup kasar sudah cukup untuk ringkasan RSS
-  return text
-    .split(/(?<=[\.\?\!])\s+|—|\u2014/g)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
+  const sinceDays = parseNumber(sinceParam, 7);
+  const since = getSinceDate(sinceDays);
 
-function looksLikeSpeechSentence(s: string): boolean {
-  const low = s.toLowerCase();
-  const hasMenhub =
-    low.includes("menhub") || low.includes("menteri perhubungan");
-  const hasVerb = SPEECH_VERBS.some((v) => low.includes(` ${v} `) || low.startsWith(`${v} `));
-  return hasMenhub && hasVerb;
-}
+  const parser = new Parser({
+    timeout: 15000,
+    headers: {
+      "user-agent": "KemenhubCC/1.0 (+https://vercel.app)",
+      accept:
+        "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+    },
+  });
 
-function clampQuoteLen(s: string): string | null {
-  const t = s.trim();
-  if (t.length < 10) return null;
-  if (t.length > 240) {
-    // coba potong di batas kalimat
-    const idx = t.indexOf(". ");
-    if (idx > 80 && idx < 240) return t.slice(0, idx + 1);
-    return t.slice(0, 240);
-  }
-  return t;
-}
+  const newsAll: NewsItem[] = [];
+  const quotesAll: QuoteItem[] = [];
+  const eventsAll: EventItem[] = []; // belum ada feed agenda resmi yang stabil
 
-function extractQuote(n: NewsOut): QuoteOut | null {
-  const textSrc = `${n.title}. ${n.summary ?? ""}`;
-  const clean = normalizeQuotes(decodeEntities(textSrc));
-
-  // 1) Prioritas isi tanda petik
-  const quoted = pickQuotedSegments(clean)
-    .map(clampQuoteLen)
-    .filter((x): x is string => Boolean(x));
-  if (quoted.length > 0) {
-    return {
-      id: `q-${n.id}`,
-      text: quoted[0],
-      speaker: "Menteri Perhubungan",
-      date: n.publishedAt,
-      context: n.source,
-      link: n.link,
-      tags: ["Kutipan", "Menhub"],
-    };
-  }
-
-  // 2) Fallback: kalimat dengan pola "ujar/menurut/menegaskan ... Menhub"
-  const cand = splitSentences(clean).find((s) => looksLikeSpeechSentence(s));
-  const clipped = cand ? clampQuoteLen(cand) : null;
-  if (clipped) {
-    return {
-      id: `q-${n.id}`,
-      text: clipped,
-      speaker: "Menteri Perhubungan",
-      date: n.publishedAt,
-      context: n.source,
-      link: n.link,
-      tags: ["Parafrasa", "Menhub"],
-    };
-  }
-
-  return null;
-}
-
-// ---------- Handler ----------
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const typesRaw = (searchParams.get("types") || "news,events,quotes")
-    .split(",")
-    .map((s) => s.trim().toLowerCase());
-  const sinceDays = Math.max(
-    1,
-    Math.min(90, Number(searchParams.get("sinceDays")) || 7)
+  await Promise.all(
+    FEEDS.map(async (f) => {
+      try {
+        const { news, quotes } = await parseFeed(parser, f, since);
+        newsAll.push(...news);
+        quotesAll.push(...quotes);
+      } catch {
+        // lanjut feed berikutnya
+      }
+    })
   );
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - sinceDays);
 
-  // Ambil feed paralel
-  const [gn, gnDept, ant, detik, kompas] = await Promise.all([
-    grab(GN_MAIN),
-    grab(GN_DEPHUB),
-    grab(ANTARA_TOP),
-    grab(DETIK_BERITA),
-    grab(KOMPAS_ROOT),
-  ]);
+  newsAll.sort(
+    (a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt)
+  );
+  quotesAll.sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
-  // Normalisasi -> News
-  const news = uniqBy(
-    [
-      ...mapToNews(gn),
-      ...mapToNews(ant),
-      ...mapToNews(detik),
-      ...mapToNews(kompas),
-    ].filter((n) => new Date(n.publishedAt) >= cutoff)
-  ).sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
-
-  // Events dari domain Kemenhub
-  const events = uniqBy(mapToNews(gnDept))
-    .filter((n) => new Date(n.publishedAt) >= cutoff)
-    .map(toEvent)
-    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
-
-  // Quotes dari News (top 20)
-  const quotes = news
-    .map(extractQuote)
-    .filter((q): q is QuoteOut => Boolean(q))
-    // de-dupe by text
-    .filter((q, idx, arr) => arr.findIndex((z) => z.text === q.text) === idx)
-    .slice(0, 20);
-
-  const payload = {
-    news: typesRaw.includes("news") ? news : [],
-    events: typesRaw.includes("events") ? events : [],
-    quotes: typesRaw.includes("quotes") ? quotes : [],
+  const out: ItemsOut = {
+    news: types.includes("news") ? newsAll.slice(0, 80) : [],
+    events: types.includes("events") ? eventsAll : [],
+    quotes: types.includes("quotes") ? quotesAll.slice(0, 80) : [],
+    meta: {
+      sinceDays,
+      fetchedAt: new Date().toISOString(),
+      sources: FEEDS.map((f) => f.name),
+    },
   };
 
-  return new Response(JSON.stringify(payload), {
+  return new Response(JSON.stringify(out), {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
