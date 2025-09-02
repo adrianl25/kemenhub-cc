@@ -1,6 +1,7 @@
 import Parser from "rss-parser";
+import { generateQuoteFromArticle } from "@/lib/quoteEngine";
 
-export const revalidate = 600; // cache 10 menit
+export const revalidate = 600; // 10 menit
 
 // ===== Types =====
 type EventItem = {
@@ -46,7 +47,7 @@ type ItemsOut = {
   };
 };
 
-// Representasi minimal sebuah item RSS, TANPA any
+// Generic RSS item tanpa any
 type GenericItem = Record<string, unknown> & {
   title?: string;
   link?: string;
@@ -62,20 +63,17 @@ function toISO(d: Date | number | string): string {
   const date = d instanceof Date ? d : new Date(d);
   return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
-
 function parseNumber(n: string | null, fallback: number): number {
   if (!n) return fallback;
   const x = Number(n);
   if (!isFinite(x) || x <= 0) return fallback;
   return Math.floor(x);
 }
-
 function getSinceDate(sinceDays: number): Date {
   const d = new Date();
   d.setDate(d.getDate() - sinceDays);
   return d;
 }
-
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -83,6 +81,67 @@ function stripHtml(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+function getString(obj: Record<string, unknown>, key: string): string {
+  const v = obj[key];
+  return typeof v === "string" ? v : "";
+}
+function getItemDate(item: GenericItem): Date {
+  const dcDate =
+    typeof (item as Record<string, unknown>)["dc:date"] === "string"
+      ? ((item as Record<string, unknown>)["dc:date"] as string)
+      : "";
+  const raw = item.isoDate || item.pubDate || dcDate || "";
+  const d = new Date(raw);
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
+// Kata kunci relevansi
+const RELEVANCE = [
+  "menhub",
+  "menteri perhubungan",
+  "kemenhub",
+];
+// Tagging lebih kaya
+const TAG_RULES: Array<{ key: string; tag: string }> = [
+  { key: "bandara", tag: "Penerbangan" },
+  { key: "penerbangan", tag: "Penerbangan" },
+  { key: "pesawat", tag: "Penerbangan" },
+  { key: "pelabuhan", tag: "Laut" },
+  { key: "pelayaran", tag: "Laut" },
+  { key: "kapal", tag: "Laut" },
+  { key: "kereta", tag: "Kereta" },
+  { key: "krl", tag: "Kereta" },
+  { key: "lrt", tag: "Kereta" },
+  { key: "mrt", tag: "Kereta" },
+  { key: "jalan tol", tag: "Darat" },
+  { key: "terminal", tag: "Darat" },
+  { key: "angkot", tag: "Darat" },
+  { key: "bus listrik", tag: "Transportasi Hijau" },
+  { key: "emisi", tag: "Transportasi Hijau" },
+  { key: "elektrifikasi", tag: "Transportasi Hijau" },
+  { key: "keselamatan", tag: "Keselamatan" },
+  { key: "regulasi", tag: "Regulasi" },
+];
+
+function isRelevant(text: string): boolean {
+  const t = text.toLowerCase();
+  return RELEVANCE.some((k) => t.includes(k));
+}
+
+function extractEntities(text: string): string[] {
+  const t = text.toLowerCase();
+  const out = new Set<string>();
+  // entitas dasar
+  if (t.includes("menhub") || t.includes("menteri perhubungan"))
+    out.add("Menteri Perhubungan");
+  if (t.includes("kemenhub")) out.add("Kemenhub");
+
+  // tag berbasis domain
+  for (const r of TAG_RULES) {
+    if (t.includes(r.key)) out.add(r.tag);
+  }
+  return Array.from(out);
 }
 
 const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
@@ -93,7 +152,7 @@ const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
   { name: "Detik", url: "https://rss.detik.com/index.php/detikNews" },
 ];
 
-// Timeout fetch (stabil di serverless)
+// fetch dengan timeout (aman di serverless)
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
@@ -111,57 +170,6 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   }
 }
 
-function extractEntities(text: string): string[] {
-  const t = text.toLowerCase();
-  const ents: string[] = [];
-  if (t.includes("menhub") || t.includes("menteri perhubungan"))
-    ents.push("Menteri Perhubungan");
-  if (t.includes("kemenhub")) ents.push("Kemenhub");
-  if (t.includes("transportasi")) ents.push("Transportasi");
-  if (t.includes("penerbangan")) ents.push("Penerbangan");
-  if (t.includes("pelabuhan") || t.includes("pelayaran")) ents.push("Laut");
-  if (t.includes("kereta") || t.includes("krl")) ents.push("Kereta");
-  if (t.includes("jalan") || t.includes("terminal") || t.includes("angkot"))
-    ents.push("Darat");
-  return Array.from(new Set(ents));
-}
-
-function extractQuoteFromText(text: string): string | null {
-  const candidates: string[] = [];
-  const fancy = /“([^”]{10,300})”/g;
-  const ascii = /"([^"]{10,300})"/g;
-  let m: RegExpExecArray | null;
-  while ((m = fancy.exec(text)) !== null) candidates.push(m[1]);
-  while ((m = ascii.exec(text)) !== null) candidates.push(m[1]);
-
-  if (candidates.length === 0) return null;
-
-  const t = text.toLowerCase();
-  const okContext =
-    t.includes("menhub") ||
-    t.includes("menteri perhubungan") ||
-    t.includes("kemenhub");
-  if (!okContext) return null;
-
-  const chosen = candidates.sort((a, b) => a.length - b.length)[0];
-  return chosen ? chosen.trim() : null;
-}
-
-function getItemDate(item: GenericItem): Date {
-  const dcDate =
-    typeof (item as Record<string, unknown>)["dc:date"] === "string"
-      ? ((item as Record<string, unknown>)["dc:date"] as string)
-      : "";
-  const raw = item.isoDate || item.pubDate || dcDate || "";
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? new Date() : d;
-}
-
-function getString(obj: Record<string, unknown>, key: string): string {
-  const v = obj[key];
-  return typeof v === "string" ? v : "";
-}
-
 async function parseFeed(
   parser: Parser,
   feed: { name: string; url: string },
@@ -174,7 +182,6 @@ async function parseFeed(
   if (!res.ok) return { news, quotes };
 
   const xml = await res.text();
-  // Hindari any: gunakan output generik
   const out = (await parser.parseString(xml)) as Parser.Output<GenericItem>;
   const items: GenericItem[] = Array.isArray(out.items) ? (out.items as GenericItem[]) : [];
 
@@ -194,6 +201,9 @@ async function parseFeed(
     if (dt < since) continue;
 
     const combined = `${title} ${summary}`;
+    // ==== FILTER RELEVANSI: hanya Menhub/Kemenhub ====
+    if (!isRelevant(combined)) continue;
+
     const entities = extractEntities(combined);
 
     const n: NewsItem = {
@@ -207,17 +217,21 @@ async function parseFeed(
     };
     news.push(n);
 
-    const qText = extractQuoteFromText(`${title}. ${summary}`);
-    if (qText) {
-      const ents = Array.isArray(entities) ? entities : [];
+    // ==== QUOTE ENGINE ====
+    const qCand = generateQuoteFromArticle({
+      title,
+      content: contentRaw || summary,
+    });
+    if (qCand) {
+      const tags = ["Kutipan", ...entities];
       const q: QuoteItem = {
         id: `${n.id}-q`,
-        text: qText,
-        speaker: "Menteri Perhubungan",
+        text: qCand.text,
+        speaker: "Menteri Perhubungan", // bisa diganti ENV bila perlu
         date: n.publishedAt,
         context: n.title,
         link: n.link,
-        tags: ["Kutipan", ...ents],
+        tags,
       };
       quotes.push(q);
     }
@@ -250,7 +264,7 @@ export async function GET(req: Request): Promise<Response> {
 
   const newsAll: NewsItem[] = [];
   const quotesAll: QuoteItem[] = [];
-  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi jika tersedia RSS
+  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi jika ada sumber
 
   await Promise.all(
     FEEDS.map(async (f) => {
@@ -259,7 +273,7 @@ export async function GET(req: Request): Promise<Response> {
         newsAll.push(...news);
         quotesAll.push(...quotes);
       } catch {
-        // lanjut ke feed berikutnya
+        // lanjut feed berikutnya
       }
     })
   );
@@ -270,9 +284,9 @@ export async function GET(req: Request): Promise<Response> {
   quotesAll.sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
   const out: ItemsOut = {
-    news: types.includes("news") ? newsAll.slice(0, 80) : [],
+    news: types.includes("news") ? newsAll.slice(0, 100) : [],
     events: types.includes("events") ? eventsAll : [],
-    quotes: types.includes("quotes") ? quotesAll.slice(0, 80) : [],
+    quotes: types.includes("quotes") ? quotesAll.slice(0, 100) : [],
     meta: {
       sinceDays,
       fetchedAt: new Date().toISOString(),
