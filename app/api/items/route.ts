@@ -44,10 +44,12 @@ type ItemsOut = {
     sinceDays: number;
     fetchedAt: string;
     sources: string[];
+    counts: { news: number; quotes: number; feedsTried: number };
+    relaxed: boolean;
+    keywords: string[];
   };
 };
 
-// Generic RSS item tanpa any
 type GenericItem = Record<string, unknown> & {
   title?: string;
   link?: string;
@@ -96,13 +98,37 @@ function getItemDate(item: GenericItem): Date {
   return isNaN(d.getTime()) ? new Date() : d;
 }
 
-// Kata kunci relevansi
-const RELEVANCE = [
+// ===== Keywords (sudah disesuaikan dgn Menhub: Dudy Purwagandhi) =====
+// Bisa override via ENV KEYWORDS (koma-dipisah) atau query ?keywords=a,b,c
+const DEFAULT_KEYWORDS = [
   "menhub",
   "menteri perhubungan",
   "kemenhub",
+  "kementerian perhubungan",
+  "dudy purwagandhi",
+  "bapak dudy purwagandhi",
+  "dudy",
+  "purwagandhi",
 ];
-// Tagging lebih kaya
+
+const DOMAIN_KEYWORDS = [
+  "transportasi",
+  "penerbangan",
+  "bandara",
+  "pelabuhan",
+  "pelayaran",
+  "kereta",
+  "krl",
+  "lrt",
+  "mrt",
+  "jalan tol",
+  "terminal",
+  "angkot",
+  "bus listrik",
+  "emisi",
+  "elektrifikasi",
+];
+
 const TAG_RULES: Array<{ key: string; tag: string }> = [
   { key: "bandara", tag: "Penerbangan" },
   { key: "penerbangan", tag: "Penerbangan" },
@@ -124,27 +150,44 @@ const TAG_RULES: Array<{ key: string; tag: string }> = [
   { key: "regulasi", tag: "Regulasi" },
 ];
 
-function isRelevant(text: string): boolean {
+function isRelevant(text: string, keys: string[]): boolean {
   const t = text.toLowerCase();
-  return RELEVANCE.some((k) => t.includes(k));
+  return keys.some((k) => t.includes(k.toLowerCase()));
 }
 
 function extractEntities(text: string): string[] {
   const t = text.toLowerCase();
   const out = new Set<string>();
-  // entitas dasar
-  if (t.includes("menhub") || t.includes("menteri perhubungan"))
+  if (
+    t.includes("menhub") ||
+    t.includes("menteri perhubungan") ||
+    t.includes("dudy purwagandhi") ||
+    t.includes("purwagandhi")
+  )
     out.add("Menteri Perhubungan");
-  if (t.includes("kemenhub")) out.add("Kemenhub");
-
-  // tag berbasis domain
-  for (const r of TAG_RULES) {
-    if (t.includes(r.key)) out.add(r.tag);
-  }
+  if (t.includes("kemenhub") || t.includes("kementerian perhubungan"))
+    out.add("Kemenhub");
+  for (const r of TAG_RULES) if (t.includes(r.key)) out.add(r.tag);
   return Array.from(out);
 }
 
+// ===== Feeds =====
 const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
+  {
+    name: "GoogleNews:Menhub",
+    url:
+      "https://news.google.com/rss/search?q=Menhub%20OR%20%22Menteri%20Perhubungan%22&hl=id&gl=ID&ceid=ID:id",
+  },
+  {
+    name: "GoogleNews:Kemenhub",
+    url:
+      "https://news.google.com/rss/search?q=Kemenhub%20OR%20%22Kementerian%20Perhubungan%22&hl=id&gl=ID&ceid=ID:id",
+  },
+  {
+    name: "GoogleNews:Dudy",
+    url:
+      "https://news.google.com/rss/search?q=%22Dudy%20Purwagandhi%22%20OR%20Purwagandhi&hl=id&gl=ID&ceid=ID:id",
+  },
   { name: "Antara", url: "https://www.antaranews.com/rss/terkini" },
   { name: "Kompas", url: "https://news.kompas.com/rss" },
   { name: "Tempo", url: "https://rss.tempo.co/tempo" },
@@ -152,7 +195,7 @@ const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
   { name: "Detik", url: "https://rss.detik.com/index.php/detikNews" },
 ];
 
-// fetch dengan timeout (aman di serverless)
+// fetch dengan timeout
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
@@ -173,7 +216,9 @@ async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
 async function parseFeed(
   parser: Parser,
   feed: { name: string; url: string },
-  since: Date
+  since: Date,
+  keys: string[],
+  strict: boolean
 ): Promise<{ news: NewsItem[]; quotes: QuoteItem[] }> {
   const news: NewsItem[] = [];
   const quotes: QuoteItem[] = [];
@@ -183,7 +228,9 @@ async function parseFeed(
 
   const xml = await res.text();
   const out = (await parser.parseString(xml)) as Parser.Output<GenericItem>;
-  const items: GenericItem[] = Array.isArray(out.items) ? (out.items as GenericItem[]) : [];
+  const items: GenericItem[] = Array.isArray(out.items)
+    ? (out.items as GenericItem[])
+    : [];
 
   for (const item of items) {
     const record = item as Record<string, unknown>;
@@ -201,8 +248,13 @@ async function parseFeed(
     if (dt < since) continue;
 
     const combined = `${title} ${summary}`;
-    // ==== FILTER RELEVANSI: hanya Menhub/Kemenhub ====
-    if (!isRelevant(combined)) continue;
+    const relevant = isRelevant(combined, keys);
+
+    if (!relevant && strict) continue;
+    if (!relevant && !strict) {
+      const domainOK = isRelevant(combined, DOMAIN_KEYWORDS);
+      if (!domainOK) continue;
+    }
 
     const entities = extractEntities(combined);
 
@@ -217,7 +269,6 @@ async function parseFeed(
     };
     news.push(n);
 
-    // ==== QUOTE ENGINE ====
     const qCand = generateQuoteFromArticle({
       title,
       content: contentRaw || summary,
@@ -227,7 +278,7 @@ async function parseFeed(
       const q: QuoteItem = {
         id: `${n.id}-q`,
         text: qCand.text,
-        speaker: "Menteri Perhubungan", // bisa diganti ENV bila perlu
+        speaker: "Menteri Perhubungan (Dudy Purwagandhi)",
         date: n.publishedAt,
         context: n.title,
         link: n.link,
@@ -243,8 +294,12 @@ async function parseFeed(
 // ===== Handler =====
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
+
   const typesParam = url.searchParams.get("types");
   const sinceParam = url.searchParams.get("sinceDays");
+  const maxParam = url.searchParams.get("max");
+  const keywordsParam = url.searchParams.get("keywords");
+  const strictParam = url.searchParams.get("strict"); // "1"(default) | "0"
 
   const types = (typesParam ? typesParam.split(",") : ["news", "quotes"])
     .map((s) => s.trim().toLowerCase())
@@ -252,6 +307,17 @@ export async function GET(req: Request): Promise<Response> {
 
   const sinceDays = parseNumber(sinceParam, 7);
   const since = getSinceDate(sinceDays);
+  const max = Math.min(Math.max(parseNumber(maxParam, 100), 10), 300);
+
+  const envKeys =
+    typeof process.env.KEYWORDS === "string" && process.env.KEYWORDS.trim()
+      ? process.env.KEYWORDS.split(",").map((x) => x.trim())
+      : [];
+  const keys = (keywordsParam ? keywordsParam.split(",") : envKeys.length ? envKeys : DEFAULT_KEYWORDS)
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+
+  const strict = strictParam === "0" ? false : true;
 
   const parser = new Parser({
     timeout: 15000,
@@ -264,12 +330,15 @@ export async function GET(req: Request): Promise<Response> {
 
   const newsAll: NewsItem[] = [];
   const quotesAll: QuoteItem[] = [];
-  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi jika ada sumber
+  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi bila tersedia
 
+  let relaxed = false;
+
+  // Strict fetch
   await Promise.all(
     FEEDS.map(async (f) => {
       try {
-        const { news, quotes } = await parseFeed(parser, f, since);
+        const { news, quotes } = await parseFeed(parser, f, since, keys, true);
         newsAll.push(...news);
         quotesAll.push(...quotes);
       } catch {
@@ -278,19 +347,36 @@ export async function GET(req: Request): Promise<Response> {
     })
   );
 
-  newsAll.sort(
-    (a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt)
-  );
+  // Relaxed fetch (domain transportasi) jika kosong total
+  if (newsAll.length === 0 && quotesAll.length === 0) {
+    relaxed = true;
+    await Promise.all(
+      FEEDS.map(async (f) => {
+        try {
+          const { news, quotes } = await parseFeed(parser, f, since, keys, false);
+          newsAll.push(...news);
+          quotesAll.push(...quotes);
+        } catch {
+          // lanjut
+        }
+      })
+    );
+  }
+
+  newsAll.sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
   quotesAll.sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
   const out: ItemsOut = {
-    news: types.includes("news") ? newsAll.slice(0, 100) : [],
+    news: types.includes("news") ? newsAll.slice(0, max) : [],
     events: types.includes("events") ? eventsAll : [],
-    quotes: types.includes("quotes") ? quotesAll.slice(0, 100) : [],
+    quotes: types.includes("quotes") ? quotesAll.slice(0, max) : [],
     meta: {
       sinceDays,
       fetchedAt: new Date().toISOString(),
       sources: FEEDS.map((f) => f.name),
+      counts: { news: newsAll.length, quotes: quotesAll.length, feedsTried: FEEDS.length },
+      relaxed,
+      keywords: keys,
     },
   };
 
