@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import Parser from "rss-parser";
 
 export const revalidate = 600; // cache 10 menit
@@ -168,11 +167,15 @@ async function parseFeed(
     const link = typeof item.link === "string" ? item.link.trim() : "";
     const contentRaw =
       (typeof item.content === "string" ? item.content : "") ||
-      (typeof item["content:encoded"] === "string"
-        ? (item["content:encoded"] as string)
+      (typeof (item as any)["content:encoded"] === "string"
+        ? ((item as any)["content:encoded"] as string)
         : "") ||
-      (typeof item.contentSnippet === "string" ? item.contentSnippet : "") ||
-      (typeof item.summary === "string" ? item.summary : "") ||
+      (typeof (item as any).contentSnippet === "string"
+        ? ((item as any).contentSnippet as string)
+        : "") ||
+      (typeof (item as any).summary === "string"
+        ? ((item as any).summary as string)
+        : "") ||
       "";
     const summary = stripHtml(contentRaw);
 
@@ -192,6 +195,7 @@ async function parseFeed(
 
     const qText = extractQuoteFromText(`${title}. ${summary}`);
     if (qText) {
+      const ents = Array.isArray(n.entities) ? n.entities : []; // <<--- FIX di sini
       const q: QuoteItem = {
         id: `${n.id}-q`,
         text: qText,
@@ -199,7 +203,7 @@ async function parseFeed(
         date: n.publishedAt,
         context: n.title,
         link: n.link,
-        tags: ["Kutipan", ...n.entities],
+        tags: ["Kutipan", ...ents], // aman untuk spread
       };
       quotes.push(q);
     }
@@ -232,7 +236,7 @@ export async function GET(req: Request): Promise<Response> {
 
   const newsAll: NewsItem[] = [];
   const quotesAll: QuoteItem[] = [];
-  const eventsAll: EventItem[] = []; // belum ada feed agenda resmi yang stabil
+  const eventsAll: EventItem[] = []; // TODO: feed agenda resmi
 
   await Promise.all(
     FEEDS.map(async (f) => {
