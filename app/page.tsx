@@ -5,14 +5,11 @@ import type { EventItem, NewsItem, QuoteItem } from "./api/items/route";
 
 // =============================
 // Command Center Kemenhub — LIVE prototype (Next.js App Router)
-// - TailwindCSS required
-// - ASCII-only strings in JSX
+// TailwindCSS required
 // =============================
 
-// Types (frontend)
 type CombinedItem = EventItem | NewsItem | QuoteItem;
 
-// Guards
 function isEvent(x: CombinedItem): x is EventItem {
   return (x as EventItem).date !== undefined && (x as EventItem).attendedByMinister !== undefined;
 }
@@ -23,11 +20,9 @@ function isQuote(x: CombinedItem): x is QuoteItem {
   return (x as QuoteItem).speaker !== undefined && (x as QuoteItem).context !== undefined;
 }
 
-// UI helpers
 const classNames = (...c: Array<string | false | undefined>) => c.filter(Boolean).join(" ");
 const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
-// Time-range map (hours)
 const RANGE_TO_HOURS: Record<"24h" | "7d" | "30d" | "90d", number> = {
   "24h": 24,
   "7d": 24 * 7,
@@ -56,29 +51,14 @@ function SectionHeader({
 }
 
 function Card({ children, dark }: { children: React.ReactNode; dark?: boolean }) {
-  return (
-    <div className={classNames("rounded-xl shadow-sm border p-4", dark ? "bg-slate-800/70 border-slate-700" : "bg-white border-slate-200")}>
-      {children}
-    </div>
-  );
+  return <div className={classNames("rounded-xl shadow-sm border p-4", dark ? "bg-slate-800/70 border-slate-700" : "bg-white border-slate-200")}>{children}</div>;
 }
 
-function Chip({
-  children,
-  active,
-  onClick,
-}: {
-  children: React.ReactNode;
-  active?: boolean;
-  onClick?: () => void;
-}) {
+function Chip({ children, active, onClick }: { children: React.ReactNode; active?: boolean; onClick?: () => void }) {
   return (
     <button
       onClick={onClick}
-      className={classNames(
-        "px-2 py-1 rounded-md text-xs border transition-colors",
-        active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-      )}
+      className={classNames("px-2 py-1 rounded-md text-xs border transition-colors", active ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50")}
     >
       {children}
     </button>
@@ -93,9 +73,6 @@ function Empty({ msg }: { msg: string }) {
   return <div className="text-center text-slate-500 border border-dashed rounded-xl p-6">{msg}</div>;
 }
 
-// =============================
-// PAGE
-// =============================
 export default function Dashboard() {
   const [tab, setTab] = useState<"overview" | "events" | "news" | "quotes">("overview");
   const [darkMode, setDarkMode] = useState(false);
@@ -152,7 +129,7 @@ export default function Dashboard() {
   }, [timeFilter, autoFetch]);
 
   // =============================
-  // FILTERING (client-side)
+  // FILTERING
   // =============================
   const tagsUniverse = useMemo(() => {
     const set = new Set<string>(["All"]);
@@ -222,9 +199,8 @@ export default function Dashboard() {
     }
   };
 
-  // === FIXED: caption generator type-safe (tanpa A || B pada union) ===
   const handleGenerateCaption = () => {
-    let top: CombinedItem | undefined = undefined;
+    let top: CombinedItem | undefined;
     if (filteredNews.length > 0) top = filteredNews[0];
     else if (filteredEvents.length > 0) top = filteredEvents[0];
 
@@ -278,10 +254,7 @@ export default function Dashboard() {
       {/* Theme toggle */}
       <button
         onClick={() => setDarkMode(!darkMode)}
-        className={classNames(
-          "fixed bottom-4 left-4 z-50 px-3 py-2 rounded-lg border text-sm",
-          darkMode ? "bg-slate-800 border-slate-600 text-slate-100 hover:bg-slate-700" : "bg-white/80 backdrop-blur border-slate-300 hover:bg-slate-100"
-        )}
+        className={classNames("fixed bottom-4 left-4 z-50 px-3 py-2 rounded-lg border text-sm", darkMode ? "bg-slate-800 border-slate-600 text-slate-100 hover:bg-slate-700" : "bg-white/80 backdrop-blur border-slate-300 hover:bg-slate-100")}
       >
         {darkMode ? "Light Mode" : "Dark Mode"}
       </button>
@@ -299,10 +272,7 @@ export default function Dashboard() {
 
           <div className="flex flex-wrap gap-2 items-center">
             <input
-              className={classNames(
-                "min-w-[140px] sm:min-w-[220px] md:min-w-[260px] w-full sm:w-auto px-3 py-2 rounded-xl border focus:outline-none",
-                darkMode ? "bg-slate-800 border-slate-600 text-slate-100 focus:ring-2 focus:ring-indigo-500" : "border-slate-300 focus:ring-2 focus:ring-indigo-600"
-              )}
+              className={classNames("min-w-[140px] sm:min-w-[220px] md:min-w-[260px] w-full sm:w-auto px-3 py-2 rounded-xl border focus:outline-none", darkMode ? "bg-slate-800 border-slate-600 text-slate-100 focus:ring-2 focus:ring-indigo-500" : "border-slate-300 focus:ring-2 focus:ring-indigo-600")}
               placeholder="Cari event, berita, quote"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -320,20 +290,11 @@ export default function Dashboard() {
 
             {/* Fetch controls */}
             <div className="flex items-center gap-2">
-              <Chip active={autoFetch} onClick={() => setAutoFetch(!autoFetch)}>
-                Auto Fetch {autoFetch ? "(on)" : "(off)"}
-              </Chip>
+              <Chip active={autoFetch} onClick={() => setAutoFetch(!autoFetch)}>Auto Fetch {autoFetch ? "(on)" : "(off)"}</Chip>
               <button
                 disabled={loading}
                 onClick={() => doFetch(RANGE_TO_HOURS[timeFilter])}
-                className={classNames(
-                  "px-3 py-2 rounded-xl text-sm",
-                  loading
-                    ? "bg-slate-300 text-slate-600 cursor-wait"
-                    : darkMode
-                    ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                    : "bg-indigo-700 text-white hover:bg-indigo-800"
-                )}
+                className={classNames("px-3 py-2 rounded-xl text-sm", loading ? "bg-slate-300 text-slate-600 cursor-wait" : darkMode ? "bg-indigo-500 text-white hover:bg-indigo-600" : "bg-indigo-700 text-white hover:bg-indigo-800")}
               >
                 {loading ? "Memuat..." : "Ambil Data Sekarang"}
               </button>
@@ -345,10 +306,7 @@ export default function Dashboard() {
               <TabButton id="events" label="Events" />
               <TabButton id="news" label="News" />
               <TabButton id="quotes" label="Quotes" />
-              <button
-                onClick={() => setAsideOpen(true)}
-                className={classNames("lg:hidden px-3 py-2 rounded-full text-sm border", darkMode ? "bg-slate-800 border-slate-600 text-slate-100" : "bg-white border-slate-300 hover:bg-slate-50")}
-              >
+              <button onClick={() => setAsideOpen(true)} className={classNames("lg:hidden px-3 py-2 rounded-full text-sm border", darkMode ? "bg-slate-800 border-slate-600 text-slate-100" : "bg-white border-slate-300 hover:bg-slate-50")}>
                 Panel Info
               </button>
             </div>
@@ -373,10 +331,7 @@ export default function Dashboard() {
                   <span className={classNames("text-xs px-2 py-0.5 rounded-full border", darkMode ? "bg-slate-700 border-slate-600" : "bg-slate-100 border-slate-200")}>
                     {tag === "All" ? `All (${tagsUniverse.length - 1})` : tag}
                   </span>
-                  <button
-                    onClick={() => setTagsOpen(true)}
-                    className={classNames("px-2 py-1 rounded-md text-xs border", darkMode ? "bg-slate-800 border-slate-600" : "bg-white border-slate-300 hover:bg-slate-50")}
-                  >
+                  <button onClick={() => setTagsOpen(true)} className={classNames("px-2 py-1 rounded-md text-xs border", darkMode ? "bg-slate-800 border-slate-600" : "bg-white border-slate-300 hover:bg-slate-50")}>
                     Kelola Tag
                   </button>
                 </div>
@@ -393,10 +348,7 @@ export default function Dashboard() {
                   icon={<span className={classNames("w-2.5 h-2.5 rounded-full inline-block", darkMode ? "bg-indigo-400" : "bg-indigo-700")} />}
                   title="Events Terbaru (LIVE)"
                   right={
-                    <button
-                      className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")}
-                      onClick={() => setTab("events")}
-                    >
+                    <button className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")} onClick={() => setTab("events")}>
                       Lihat semua
                     </button>
                   }
@@ -422,10 +374,7 @@ export default function Dashboard() {
                   icon={<span className={classNames("w-2.5 h-2.5 rounded-full inline-block", darkMode ? "bg-indigo-400" : "bg-indigo-700")} />}
                   title="News Ringkas (LIVE)"
                   right={
-                    <button
-                      className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")}
-                      onClick={() => setTab("news")}
-                    >
+                    <button className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")} onClick={() => setTab("news")}>
                       Lihat semua
                     </button>
                   }
@@ -451,10 +400,7 @@ export default function Dashboard() {
                   icon={<span className={classNames("w-2.5 h-2.5 rounded-full inline-block", darkMode ? "bg-indigo-400" : "bg-indigo-700")} />}
                   title="Quotes Terkini (LIVE)"
                   right={
-                    <button
-                      className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")}
-                      onClick={() => setTab("quotes")}
-                    >
+                    <button className={classNames("text-sm underline-offset-2", darkMode ? "text-indigo-300 hover:underline" : "text-indigo-700 hover:underline")} onClick={() => setTab("quotes")}>
                       Lihat semua
                     </button>
                   }
@@ -477,17 +423,10 @@ export default function Dashboard() {
                 <div className="space-y-2">
                   <div className="text-sm opacity-80">Ambil item teratas dari News/Events setelah filter, lalu buat caption cepat.</div>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={handleGenerateCaption}
-                      className={classNames("px-3 py-2 rounded-xl", darkMode ? "bg-indigo-500 text-white hover:bg-indigo-600" : "bg-indigo-700 text-white hover:bg-indigo-800")}
-                    >
+                    <button onClick={handleGenerateCaption} className={classNames("px-3 py-2 rounded-xl", darkMode ? "bg-indigo-500 text-white hover:bg-indigo-600" : "bg-indigo-700 text-white hover:bg-indigo-800")}>
                       Generate
                     </button>
-                    <button
-                      onClick={handleCopy}
-                      disabled={!caption}
-                      className={classNames("px-3 py-2 rounded-xl border", darkMode ? "border-slate-600 hover:bg-slate-800" : "border-slate-300 hover:bg-slate-50", !caption && "opacity-50 cursor-not-allowed")}
-                    >
+                    <button onClick={handleCopy} disabled={!caption} className={classNames("px-3 py-2 rounded-xl border", darkMode ? "border-slate-600 hover:bg-slate-800" : "border-slate-300 hover:bg-slate-50", !caption && "opacity-50 cursor-not-allowed")}>
                       Copy
                     </button>
                     {caption && <StatBadge>Siap diposting</StatBadge>}
@@ -759,7 +698,7 @@ export default function Dashboard() {
       {/* Toast */}
       {toast && <div className="fixed bottom-4 right-4 z-50 text-sm px-4 py-3 rounded-lg shadow-lg text-white bg-slate-900">{toast}</div>}
 
-      <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">Prototype LIVE — data berasal dari RSS media yang menyebut Menhub/Kemenhub. Tambahkan RSS resmi Kemenhub untuk hasil lebih kaya.</footer>
+      <footer className="max-w-7xl mx-auto px-3 sm:px-4 pb-10 text-xs opacity-70">Prototype LIVE — data berasal dari RSS media yang menyebut Menhub/Kemenhub. Tambahkan RSS resmi Kemenhub untuk hasil lebih relevan.</footer>
     </div>
   );
 }
