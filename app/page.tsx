@@ -65,6 +65,17 @@ const hoursMap: Record<"24h"|"7d"|"30d"|"90d", number> = {
   "90d": 24 * 90,
 };
 
+// ===== Type guards aman =====
+function isEvent(x: unknown): x is EventItem {
+  return !!x && typeof x === "object" && "date" in (x as any) && "location" in (x as any);
+}
+function isNews(x: unknown): x is NewsItem {
+  return !!x && typeof x === "object" && "publishedAt" in (x as any) && "source" in (x as any);
+}
+function isQuote(x: unknown): x is QuoteItem {
+  return !!x && typeof x === "object" && "speaker" in (x as any) && "text" in (x as any);
+}
+
 // ===== Mini hook fetch JSON (pengganti SWR) =====
 function useJson<T>(key: string | null, fetcher: (url: string) => Promise<T>) {
   const [data, setData] = useState<T | undefined>(undefined);
@@ -90,7 +101,7 @@ function useJson<T>(key: string | null, fetcher: (url: string) => Promise<T>) {
     return () => { alive = false; };
   }, [key, fetcher]);
 
-  return { data, error, isLoading, setData };
+  return { data, error, isLoading };
 }
 
 // ====== UI Komponen Kecil ======
@@ -108,26 +119,6 @@ function StatBadge({ children }: { children: React.ReactNode }) {
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
       {children}
     </span>
-  );
-}
-
-function Chip({
-  children, active, onClick, dark,
-}: { children: React.ReactNode; active?: boolean; onClick?: () => void; dark?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className={classNames(
-        "px-2 py-1 rounded-md text-xs border transition-colors",
-        active
-          ? "bg-indigo-600 text-white border-indigo-600"
-          : dark
-          ? "bg-slate-800 text-slate-100 border-slate-600 hover:bg-slate-700"
-          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-      )}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -174,7 +165,6 @@ export default function Dashboard() {
   // Bangun URL API berdasarkan state
   const apiUrl = useMemo(() => {
     const hours = hoursMap[range];
-    // types=events,news,quotes → ambil semua
     const params = new URLSearchParams();
     params.set("types", "events,news,quotes");
     params.set("hours", String(hours));
@@ -191,7 +181,7 @@ export default function Dashboard() {
     return r.json();
   });
 
-  const { data, error, isLoading, setData } = useJson<ApiOut>(apiUrl, fetcher);
+  const { data, error, isLoading } = useJson<ApiOut>(apiUrl, fetcher);
 
   // Saat range berubah & autoOnRange aktif → bump nonce agar fetch
   useEffect(() => {
@@ -252,23 +242,29 @@ export default function Dashboard() {
     }
   };
 
-  // Caption generator kecil
+  // Caption generator — pakai type guards
   const handleGenerateCaption = () => {
-    const topN = filteredNews[0];
-    const topE = filteredEvents[0];
-    const top = topN ?? topE;
+    const top = filteredNews[0] ?? filteredEvents[0];
     if (!top) {
       setToast("Tidak ada item untuk dijadikan caption");
       setTimeout(() => setToast(""), 1700);
       return;
     }
-    const title = (top as NewsItem).title ?? (top as EventItem).title ?? "Pembaruan";
-    const info =
-      (top as NewsItem).summary ??
-      (top as EventItem).summary ??
-      (top as NewsItem).source ??
-      (top as EventItem).source ??
-      "";
+
+    let title = "Pembaruan";
+    let info = "";
+
+    if (isNews(top)) {
+      title = top.title || "Pembaruan";
+      info = top.summary || top.source || "";
+    } else if (isEvent(top)) {
+      title = top.title || "Pembaruan";
+      info = top.summary || top.source || "";
+    } else if (isQuote(top)) {
+      title = top.text.slice(0, 80);
+      info = top.speaker || "";
+    }
+
     const base = `Menhub ${leader}: ${title} — ${info} #Kemenhub #Transportasi`;
     setCaption(base);
     setToast("Caption dibuat");
@@ -409,7 +405,7 @@ export default function Dashboard() {
             />
 
             <button
-              onClick={refreshNow}
+              onClick={() => setManualNonce((n)=>n+1)}
               className={classNames(
                 "px-3 py-2 rounded-xl",
                 darkMode ? "bg-indigo-500 text-white hover:bg-indigo-600"
