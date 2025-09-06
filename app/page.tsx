@@ -65,15 +65,45 @@ const hoursMap: Record<"24h"|"7d"|"30d"|"90d", number> = {
   "90d": 24 * 90,
 };
 
-// ===== Type guards aman =====
+// ===== Helper object check (tanpa any) =====
+function isObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+
+// ===== Type guards aman (tanpa any) =====
 function isEvent(x: unknown): x is EventItem {
-  return !!x && typeof x === "object" && "date" in (x as any) && "location" in (x as any);
+  if (!isObject(x)) return false;
+  return (
+    typeof x.id === "string" &&
+    typeof x.title === "string" &&
+    typeof x.date === "string" &&
+    typeof x.location === "string" &&
+    typeof x.attendedByMinister === "boolean" &&
+    typeof x.source === "string" &&
+    typeof x.link === "string"
+  );
 }
+
 function isNews(x: unknown): x is NewsItem {
-  return !!x && typeof x === "object" && "publishedAt" in (x as any) && "source" in (x as any);
+  if (!isObject(x)) return false;
+  return (
+    typeof x.id === "string" &&
+    typeof x.title === "string" &&
+    typeof x.source === "string" &&
+    typeof x.publishedAt === "string" &&
+    typeof x.link === "string"
+  );
 }
+
 function isQuote(x: unknown): x is QuoteItem {
-  return !!x && typeof x === "object" && "speaker" in (x as any) && "text" in (x as any);
+  if (!isObject(x)) return false;
+  return (
+    typeof x.id === "string" &&
+    typeof x.text === "string" &&
+    typeof x.speaker === "string" &&
+    typeof x.date === "string" &&
+    typeof x.link === "string"
+  );
 }
 
 // ===== Mini hook fetch JSON (pengganti SWR) =====
@@ -91,7 +121,7 @@ function useJson<T>(key: string | null, fetcher: (url: string) => Promise<T>) {
       try {
         const res = await fetcher(key);
         if (alive) setData(res);
-      } catch (e) {
+      } catch (e: unknown) {
         if (alive) setError(e);
       } finally {
         if (alive) setIsLoading(false);
@@ -178,7 +208,7 @@ export default function Dashboard() {
   // Fetcher standar
   const fetcher = (url: string) => fetch(url).then(r => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+    return r.json() as Promise<ApiOut>;
   });
 
   const { data, error, isLoading } = useJson<ApiOut>(apiUrl, fetcher);
@@ -244,7 +274,7 @@ export default function Dashboard() {
 
   // Caption generator — pakai type guards
   const handleGenerateCaption = () => {
-    const top = filteredNews[0] ?? filteredEvents[0];
+    const top: unknown = filteredNews[0] ?? filteredEvents[0] ?? filteredQuotes[0];
     if (!top) {
       setToast("Tidak ada item untuk dijadikan caption");
       setTimeout(() => setToast(""), 1700);
@@ -274,7 +304,7 @@ export default function Dashboard() {
   // Copy helper
   async function copyToClipboard(text: string) {
     try {
-      if (navigator?.clipboard?.writeText) {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
         return true;
       }
@@ -302,9 +332,6 @@ export default function Dashboard() {
     setToast(ok ? "Caption disalin ke clipboard" : "Gagal menyalin. Pilih teks lalu Ctrl/Cmd+C");
     setTimeout(() => setToast(""), 1600);
   };
-
-  // Tombol refresh manual
-  const refreshNow = () => setManualNonce((n) => n + 1);
 
   // Tab button
   function TabButton({ id, label }: { id: "overview"|"events"|"news"|"quotes"; label: string }) {
