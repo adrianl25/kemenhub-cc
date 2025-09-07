@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import Parser from "rss-parser";
-import { generateQuoteFromArticle } from "@/lib/quoteEngine";
 
-export const revalidate = 600; // 10 menit
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-// ===== Types =====
-type EventItem = {
+/** ===== Types ===== */
+export type EventItem = {
   id: string;
   title: string;
   date: string; // ISO
@@ -16,7 +17,7 @@ type EventItem = {
   link: string;
 };
 
-type NewsItem = {
+export type NewsItem = {
   id: string;
   title: string;
   source: string;
@@ -24,364 +25,301 @@ type NewsItem = {
   link: string;
   summary?: string;
   entities?: string[];
+  tags?: string[]; // <-- tambahan: selalu diisi oleh API
 };
 
-type QuoteItem = {
+export type QuoteItem = {
   id: string;
   text: string;
   speaker: string;
   date: string; // ISO
   context?: string;
   link: string;
-  tags?: string[];
+  tags?: string[]; // <-- selalu diisi oleh API
 };
 
-type ItemsOut = {
+export type ItemsResponse = {
+  meta: {
+    ok: boolean;
+    generatedAt: string;
+    sourcesTried: string[];
+    sourcesOk: string[];
+    note?: string;
+  };
   news: NewsItem[];
   events: EventItem[];
   quotes: QuoteItem[];
-  meta: {
-    sinceDays: number;
-    fetchedAt: string;
-    sources: string[];
-    counts: { news: number; quotes: number; feedsTried: number };
-    relaxed: boolean;
-    keywords: string[];
-  };
 };
 
-type GenericItem = Record<string, unknown> & {
-  title?: string;
-  link?: string;
-  content?: string;
-  contentSnippet?: string;
-  summary?: string;
-  isoDate?: string;
-  pubDate?: string;
-};
+/** ===== Utils ===== */
+const UA =
+  "Mozilla/5.0 (compatible; Kemenhub-CC/1.0; +https://example.invalid)";
 
-// ===== Helpers =====
-function toISO(d: Date | number | string): string {
-  const date = d instanceof Date ? d : new Date(d);
-  return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
-}
-function parseNumber(n: string | null, fallback: number): number {
-  if (!n) return fallback;
-  const x = Number(n);
-  if (!isFinite(x) || x <= 0) return fallback;
-  return Math.floor(x);
-}
-function getSinceDate(sinceDays: number): Date {
+function sinceDays(days: number): Date {
   const d = new Date();
-  d.setDate(d.getDate() - sinceDays);
+  d.setDate(d.getDate() - days);
   return d;
 }
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function getString(obj: Record<string, unknown>, key: string): string {
-  const v = obj[key];
-  return typeof v === "string" ? v : "";
-}
-function getItemDate(item: GenericItem): Date {
-  const dcDate =
-    typeof (item as Record<string, unknown>)["dc:date"] === "string"
-      ? ((item as Record<string, unknown>)["dc:date"] as string)
-      : "";
-  const raw = item.isoDate || item.pubDate || dcDate || "";
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? new Date() : d;
+
+function minDateFromRange(key: string): Date {
+  switch (key) {
+    case "24h":
+    case "1d":
+      return sinceDays(1);
+    case "7d":
+      return sinceDays(7);
+    case "30d":
+      return sinceDays(30);
+    case "90d":
+      return sinceDays(90);
+    default:
+      return sinceDays(7);
+  }
 }
 
-// ===== Keywords (sudah disesuaikan dgn Menhub: Dudy Purwagandhi) =====
-// Bisa override via ENV KEYWORDS (koma-dipisah) atau query ?keywords=a,b,c
-const DEFAULT_KEYWORDS = [
-  "menhub",
+function parseDateGuess(s?: string): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(+d) ? null : d;
+}
+
+const MENHUB_KEYWORDS = [
   "menteri perhubungan",
+  "menhub",
+  "dudy purwagandhi",
   "kemenhub",
   "kementerian perhubungan",
-  "dudy purwagandhi",
-  "bapak dudy purwagandhi",
-  "dudy",
-  "purwagandhi",
 ];
 
-const DOMAIN_KEYWORDS = [
-  "transportasi",
-  "penerbangan",
-  "bandara",
-  "pelabuhan",
-  "pelayaran",
-  "kereta",
-  "krl",
-  "lrt",
-  "mrt",
-  "jalan tol",
-  "terminal",
-  "angkot",
-  "bus listrik",
-  "emisi",
-  "elektrifikasi",
+const EVENT_VERBS = [
+  "meresmikan",
+  "resmikan",
+  "peresmian",
+  "menghadiri",
+  "hadiri",
+  "meninjau",
+  "tinjau",
+  "melepas",
+  "kunjungan",
+  "rapat",
+  "rakor",
+  "meluncurkan",
+  "launching",
+  "dialog publik",
+  "diskusi publik",
 ];
 
-const TAG_RULES: Array<{ key: string; tag: string }> = [
-  { key: "bandara", tag: "Penerbangan" },
-  { key: "penerbangan", tag: "Penerbangan" },
-  { key: "pesawat", tag: "Penerbangan" },
-  { key: "pelabuhan", tag: "Laut" },
-  { key: "pelayaran", tag: "Laut" },
-  { key: "kapal", tag: "Laut" },
-  { key: "kereta", tag: "Kereta" },
-  { key: "krl", tag: "Kereta" },
-  { key: "lrt", tag: "Kereta" },
-  { key: "mrt", tag: "Kereta" },
-  { key: "jalan tol", tag: "Darat" },
-  { key: "terminal", tag: "Darat" },
-  { key: "angkot", tag: "Darat" },
-  { key: "bus listrik", tag: "Transportasi Hijau" },
-  { key: "emisi", tag: "Transportasi Hijau" },
-  { key: "elektrifikasi", tag: "Transportasi Hijau" },
-  { key: "keselamatan", tag: "Keselamatan" },
-  { key: "regulasi", tag: "Regulasi" },
+const TAG_MAP: Array<[string, RegExp]> = [
+  ["Darat", /\b(bus|terminal|jalan tol|lalu lintas|angkutan jalan|angkot|ojek)\b/i],
+  ["Laut", /\b(pelabuhan|kapal|pelayaran|laut|ferry|penyeberangan|bakauheni|merak)\b/i],
+  ["Udara", /\b(bandara|penerbangan|pesawat|airnav|runway|ap ii|ap i)\b/i],
+  ["Kereta", /\b(kereta|ka|stasiun|krl|lrt|mrt|kcic|whoosh)\b/i],
+  ["Keselamatan", /\b(keselamatan|kecelakaan|audit|zero accident|penertiban)\b/i],
+  ["Logistik", /\b(logistik|kontainer|kargo|supply chain)\b/i],
+  ["Integrasi", /\b(integrasi|antarmoda|first mile|last mile|tiket terusan)\b/i],
+  ["Regulasi", /\b(permenhub|aturan|regulasi|surat edaran|se)\b/i],
 ];
 
-function isRelevant(text: string, keys: string[]): boolean {
-  const t = text.toLowerCase();
-  return keys.some((k) => t.includes(k.toLowerCase()));
+function titleCase(s: string) {
+  return s
+    .toLowerCase()
+    .split(" ")
+    .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
 
-function extractEntities(text: string): string[] {
-  const t = text.toLowerCase();
-  const out = new Set<string>();
-  if (
-    t.includes("menhub") ||
-    t.includes("menteri perhubungan") ||
-    t.includes("dudy purwagandhi") ||
-    t.includes("purwagandhi")
-  )
-    out.add("Menteri Perhubungan");
-  if (t.includes("kemenhub") || t.includes("kementerian perhubungan"))
-    out.add("Kemenhub");
-  for (const r of TAG_RULES) if (t.includes(r.key)) out.add(r.tag);
-  return Array.from(out);
-}
-
-// ===== Feeds =====
-const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
-  {
-    name: "GoogleNews:Menhub",
-    url:
-      "https://news.google.com/rss/search?q=Menhub%20OR%20%22Menteri%20Perhubungan%22&hl=id&gl=ID&ceid=ID:id",
-  },
-  {
-    name: "GoogleNews:Kemenhub",
-    url:
-      "https://news.google.com/rss/search?q=Kemenhub%20OR%20%22Kementerian%20Perhubungan%22&hl=id&gl=ID&ceid=ID:id",
-  },
-  {
-    name: "GoogleNews:Dudy",
-    url:
-      "https://news.google.com/rss/search?q=%22Dudy%20Purwagandhi%22%20OR%20Purwagandhi&hl=id&gl=ID&ceid=ID:id",
-  },
-  { name: "Antara", url: "https://www.antaranews.com/rss/terkini" },
-  { name: "Kompas", url: "https://news.kompas.com/rss" },
-  { name: "Tempo", url: "https://rss.tempo.co/tempo" },
-  { name: "Bisnis", url: "https://www.bisnis.com/rss" },
-  { name: "Detik", url: "https://rss.detik.com/index.php/detikNews" },
-];
-
-// fetch dengan timeout
-async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "user-agent": "Mozilla/5.0 KemenhubCC/1.0 (+https://vercel.app)",
-        accept:
-          "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-      },
-    });
-  } finally {
-    clearTimeout(id);
+function extractTagsByRegex(text: string): string[] {
+  const t: string[] = [];
+  for (const [name, rx] of TAG_MAP) {
+    if (rx.test(text)) t.push(name);
   }
+  return t;
 }
 
-async function parseFeed(
-  parser: Parser,
-  feed: { name: string; url: string },
-  since: Date,
-  keys: string[],
-  strict: boolean
-): Promise<{ news: NewsItem[]; quotes: QuoteItem[] }> {
+function normalizeTags(raw: string[]): string[] {
+  const blacklist = new Set(
+    MENHUB_KEYWORDS.map((x) => x.toLowerCase())
+  );
+  const unique = Array.from(
+    new Set(
+      raw
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .filter((s) => !blacklist.has(s.toLowerCase()))
+    )
+  );
+  const pretty = unique.map(titleCase);
+  return pretty.length ? pretty.slice(0, 8) : ["Umum"];
+}
+
+function mentionsMenhub(text: string): boolean {
+  const hay = text.toLowerCase();
+  return MENHUB_KEYWORDS.some((k) => hay.includes(k));
+}
+
+function looksLikeEvent(title: string, desc: string): boolean {
+  const hay = `${title} ${desc}`.toLowerCase();
+  return mentionsMenhub(hay) && EVENT_VERBS.some((v) => hay.includes(v));
+}
+
+function pickQuoteFrom(description: string, title: string): string | null {
+  const desc = (description || "").replace(/\s+/g, " ").trim();
+  const q1 = desc.match(/[“"']([^"”']{30,220})["”']/);
+  if (q1?.[1]) return q1[1].trim();
+
+  const sentences = desc.split(/(?<=[.!?])\s+/).slice(0, 8);
+  const q2 = sentences.find(
+    (s) =>
+      mentionsMenhub(s) &&
+      /\b(mengatakan|menyatakan|menegaskan|menjelaskan|ujar|kata)\b/i.test(s)
+  );
+  if (q2) return q2.trim();
+
+  if (mentionsMenhub(title)) return title.trim();
+  return null;
+}
+
+async function parseRss(url: string) {
+  const parser = new Parser({
+    headers: { "User-Agent": UA },
+    customFields: { item: ["description", "contentSnippet"] },
+    timeout: 8000,
+  } as unknown as Parser.Options);
+  return parser.parseURL(url);
+}
+
+function buildSources(): string[] {
+  const q = encodeURIComponent(
+    '(("Menteri Perhubungan" OR Menhub OR "Dudy Purwagandhi") AND (Kemenhub OR "Kementerian Perhubungan"))'
+  );
+  const base = "&hl=id&gl=ID&ceid=ID:id";
+  return [
+    `https://news.google.com/rss/search?q=${q}${base}`,
+    `https://news.google.com/rss/search?q=${encodeURIComponent(
+      'Kemenhub OR "Kementerian Perhubungan"'
+    )}${base}`,
+  ];
+}
+
+/** ===== GET ===== */
+export async function GET(req: Request): Promise<Response> {
+  const { searchParams } = new URL(req.url);
+  const range = (searchParams.get("range") || "7d") as "24h" | "7d" | "30d" | "90d";
+  const onlyMenhub = (searchParams.get("onlyMenhub") || "1") === "1";
+  const q = (searchParams.get("q") || "").trim().toLowerCase();
+  const types = (searchParams.get("types") || "news,events,quotes")
+    .split(",")
+    .map((s) => s.trim());
+
+  const minDate = minDateFromRange(range);
+
+  const sources = buildSources();
+  const sourcesOk: string[] = [];
+  const sourcesTried: string[] = [...sources];
+
   const news: NewsItem[] = [];
+  const events: EventItem[] = [];
   const quotes: QuoteItem[] = [];
 
-  const res = await fetchWithTimeout(feed.url, 12000);
-  if (!res.ok) return { news, quotes };
+  const settled = await Promise.allSettled(sources.map((u) => parseRss(u)));
 
-  const xml = await res.text();
-  const out = (await parser.parseString(xml)) as Parser.Output<GenericItem>;
-  const items: GenericItem[] = Array.isArray(out.items)
-    ? (out.items as GenericItem[])
-    : [];
+  settled.forEach((res, idx) => {
+    if (res.status !== "fulfilled") return;
+    sourcesOk.push(sources[idx]);
+    const feed = res.value;
 
-  for (const item of items) {
-    const record = item as Record<string, unknown>;
-    const title = typeof item.title === "string" ? item.title.trim() : "";
-    const link = typeof item.link === "string" ? item.link.trim() : "";
-    const contentRaw =
-      (typeof item.content === "string" ? item.content : "") ||
-      getString(record, "content:encoded") ||
-      (typeof item.contentSnippet === "string" ? item.contentSnippet : "") ||
-      (typeof item.summary === "string" ? item.summary : "") ||
-      "";
-    const summary = stripHtml(contentRaw);
+    for (const it of feed.items || []) {
+      const published =
+        parseDateGuess(it.isoDate || it.pubDate || (it as any).pubdate) || new Date();
+      if (published < minDate) continue;
 
-    const dt = getItemDate(item);
-    if (dt < since) continue;
+      const title = (it.title || "").trim();
+      const link = (it.link || "").trim();
+      const summary = (it.contentSnippet || (it as any)["description"] || "").trim();
+      const sourceDomain = (feed.link || sources[idx]).replace(/^https?:\/\//, "");
+      const hay = `${title} ${summary}`.toLowerCase();
 
-    const combined = `${title} ${summary}`;
-    const relevant = isRelevant(combined, keys);
+      if (q && !hay.includes(q)) continue;
 
-    if (!relevant && strict) continue;
-    if (!relevant && !strict) {
-      const domainOK = isRelevant(combined, DOMAIN_KEYWORDS);
-      if (!domainOK) continue;
+      const isMenhub = mentionsMenhub(hay);
+      const isEvent = looksLikeEvent(title, summary);
+
+      // tags: gabungan regex + kata kunci yang cocok
+      const regexTags = extractTagsByRegex(hay);
+      const menhubTags = MENHUB_KEYWORDS.filter((k) => hay.includes(k));
+      const combinedTags = normalizeTags([...regexTags, ...menhubTags]);
+
+      const entities = normalizeTags([...combinedTags]);
+
+      if (types.includes("events") && isEvent) {
+        const ev: EventItem = {
+          id: `evt-${Math.random().toString(36).slice(2, 10)}`,
+          title,
+          date: published.toISOString(),
+          location: "",
+          attendedByMinister: isMenhub,
+          source: sourceDomain,
+          tags: combinedTags, // <-- selalu ada (minimal "Umum")
+          summary,
+          link,
+        };
+        if (!onlyMenhub || ev.attendedByMinister) events.push(ev);
+      }
+
+      if (types.includes("news")) {
+        if (!onlyMenhub || isMenhub) {
+          const n: NewsItem = {
+            id: `news-${Math.random().toString(36).slice(2, 10)}`,
+            title,
+            source: sourceDomain,
+            publishedAt: published.toISOString(),
+            link,
+            summary,
+            entities,
+            tags: combinedTags, // <-- tambahkan untuk tampilan chip
+          };
+          news.push(n);
+        }
+      }
+
+      if (types.includes("quotes")) {
+        if (!onlyMenhub || isMenhub) {
+          const text = pickQuoteFrom(summary, title);
+          if (text) {
+            const qitem: QuoteItem = {
+              id: `q-${Math.random().toString(36).slice(2, 10)}`,
+              text,
+              speaker: "Menteri Perhubungan",
+              date: published.toISOString(),
+              context: title,
+              link,
+              tags: combinedTags, // <-- tambahkan
+            };
+            quotes.push(qitem);
+          }
+        }
+      }
     }
-
-    const entities = extractEntities(combined);
-
-    const n: NewsItem = {
-      id: `${feed.name}-${dt.getTime()}-${title.slice(0, 24)}`,
-      title: title || "(tanpa judul)",
-      source: feed.name,
-      publishedAt: toISO(dt),
-      link: link || "#",
-      summary: summary.slice(0, 400),
-      entities,
-    };
-    news.push(n);
-
-    const qCand = generateQuoteFromArticle({
-      title,
-      content: contentRaw || summary,
-    });
-    if (qCand) {
-      const tags = ["Kutipan", ...entities];
-      const q: QuoteItem = {
-        id: `${n.id}-q`,
-        text: qCand.text,
-        speaker: "Menteri Perhubungan (Dudy Purwagandhi)",
-        date: n.publishedAt,
-        context: n.title,
-        link: n.link,
-        tags,
-      };
-      quotes.push(q);
-    }
-  }
-
-  return { news, quotes };
-}
-
-// ===== Handler =====
-export async function GET(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-
-  const typesParam = url.searchParams.get("types");
-  const sinceParam = url.searchParams.get("sinceDays");
-  const maxParam = url.searchParams.get("max");
-  const keywordsParam = url.searchParams.get("keywords");
-  const strictParam = url.searchParams.get("strict"); // "1"(default) | "0"
-
-  const types = (typesParam ? typesParam.split(",") : ["news", "quotes"])
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s === "news" || s === "events" || s === "quotes");
-
-  const sinceDays = parseNumber(sinceParam, 7);
-  const since = getSinceDate(sinceDays);
-  const max = Math.min(Math.max(parseNumber(maxParam, 100), 10), 300);
-
-  const envKeys =
-    typeof process.env.KEYWORDS === "string" && process.env.KEYWORDS.trim()
-      ? process.env.KEYWORDS.split(",").map((x) => x.trim())
-      : [];
-  const keys = (keywordsParam ? keywordsParam.split(",") : envKeys.length ? envKeys : DEFAULT_KEYWORDS)
-    .map((k) => k.trim())
-    .filter((k) => k.length > 0);
-
-  const strict = strictParam === "0" ? false : true;
-
-  const parser = new Parser({
-    timeout: 15000,
-    headers: {
-      "user-agent": "KemenhubCC/1.0 (+https://vercel.app)",
-      accept:
-        "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-    },
   });
 
-  const newsAll: NewsItem[] = [];
-  const quotesAll: QuoteItem[] = [];
-  const eventsAll: EventItem[] = []; // TODO: sambungkan ke agenda resmi bila tersedia
+  // sort terbaru
+  news.sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+  events.sort((a, b) => +new Date(b.date) - +new Date(a.date));
+  quotes.sort((a, b) => +new Date(b.date) - +new Date(a.date));
 
-  let relaxed = false;
-
-  // Strict fetch
-  await Promise.all(
-    FEEDS.map(async (f) => {
-      try {
-        const { news, quotes } = await parseFeed(parser, f, since, keys, true);
-        newsAll.push(...news);
-        quotesAll.push(...quotes);
-      } catch {
-        // lanjut feed berikutnya
-      }
-    })
-  );
-
-  // Relaxed fetch (domain transportasi) jika kosong total
-  if (newsAll.length === 0 && quotesAll.length === 0) {
-    relaxed = true;
-    await Promise.all(
-      FEEDS.map(async (f) => {
-        try {
-          const { news, quotes } = await parseFeed(parser, f, since, keys, false);
-          newsAll.push(...news);
-          quotesAll.push(...quotes);
-        } catch {
-          // lanjut
-        }
-      })
-    );
-  }
-
-  newsAll.sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
-  quotesAll.sort((a, b) => +new Date(b.date) - +new Date(a.date));
-
-  const out: ItemsOut = {
-    news: types.includes("news") ? newsAll.slice(0, max) : [],
-    events: types.includes("events") ? eventsAll : [],
-    quotes: types.includes("quotes") ? quotesAll.slice(0, max) : [],
+  const payload: ItemsResponse = {
     meta: {
-      sinceDays,
-      fetchedAt: new Date().toISOString(),
-      sources: FEEDS.map((f) => f.name),
-      counts: { news: newsAll.length, quotes: quotesAll.length, feedsTried: FEEDS.length },
-      relaxed,
-      keywords: keys,
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      sourcesTried,
+      sourcesOk,
+      note:
+        "Live dari Google News RSS (kueri Menhub/Dudy/Kemenhub). Event=heuristik (kata kerja + menyebut Menhub).",
     },
+    news,
+    events,
+    quotes,
   };
 
-  return new Response(JSON.stringify(out), {
-    status: 200,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return Response.json(payload, { status: 200 });
 }
