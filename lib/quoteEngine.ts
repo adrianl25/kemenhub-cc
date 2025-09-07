@@ -1,93 +1,84 @@
-// app/quoteEngine.ts
-// ASCII-only; no external deps.
-// Membuat kutipan dari item berita (jika ada tanda kutip), atau fallback ringkasan bergaya kutipan.
-
-export type NewsItem = {
-  id: string;
-  title: string;
-  source: string;
-  publishedAt: string; // ISO
-  link: string;
-  summary?: string;
-  entities?: string[];
-};
+// lib/quoteEngine.ts
 
 export type QuoteItem = {
   id: string;
   text: string;
-  speaker: string;
-  date: string; // ISO
+  speaker?: string;
+  date?: string;
   context?: string;
   link: string;
   tags?: string[];
 };
 
-// Cari frasa di antara tanda kutip
-function extractQuoted(sentence: string): string | null {
-  const s = sentence || "";
-  const rx = /"([^"]{12,280})"/g; // panjang aman
-  const m = rx.exec(s);
-  if (m && m[1]) return m[1].trim();
-  return null;
-}
+/**
+ * Ekstrak kutipan dari sebuah teks (content / snippet) dengan pola tanda kutip umum.
+ * Hanya mengembalikan kutipan asli yang ditemukan (tidak mengarang).
+ */
+export function extractQuotesFromText(
+  text: string,
+  opts: {
+    link: string;
+    context?: string;
+    date?: string;
+    defaultSpeaker?: string;
+    maxQuotes?: number;
+    extraTags?: string[];
+  }
+): QuoteItem[] {
+  const {
+    link,
+    context,
+    date,
+    defaultSpeaker,
+    maxQuotes = 3,
+    extraTags = [],
+  } = opts;
 
-// Heuristik sederhana untuk mendeteksi konteks/speaker
-function inferSpeaker(source: string): string {
-  const low = (source || "").toLowerCase();
-  if (low.includes("kemenhub")) return "Kementerian Perhubungan";
-  if (low.includes("antara")) return "ANTARA";
-  if (low.includes("kompas")) return "Kompas";
-  if (low.includes("tempo")) return "Tempo";
-  return "Narasumber";
-}
+  const src = (text ?? "").trim();
+  if (!src) return [];
 
-const MENHUB_NAME = "Dudy Purwagandhi";
+  // Pola tanda kutip yang sering dipakai media Indonesia
+  const patterns = [
+    /“([^”]{12,300})”/g, // kutip melengkung
+    /"([^"]{12,300})"/g,  // kutip lurus
+    /‘([^’]{12,300})’/g,  // single curly
+    /'([^']{12,300})'/g,  // single straight
+  ];
 
-export function generateQuotesFromNews(newsList: NewsItem[]): QuoteItem[] {
-  const out: QuoteItem[] = [];
-  const nowISO = new Date().toISOString();
-
-  for (const n of newsList) {
-    const joined = [n.title, n.summary].filter(Boolean).join(". ");
-    const direct = extractQuoted(joined);
-
-    if (direct) {
-      out.push({
-        id: `q-${n.id}`,
-        text: direct,
-        speaker: MENHUB_NAME, // asumsi kutipan relevan dengan Menhub; bisa diperkaya jika ada NER
-        date: n.publishedAt || nowISO,
-        context: n.title,
-        link: n.link,
-        tags: ["Kutipan", ...(n.entities || [])],
-      });
-      continue;
+  const found: string[] = [];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      const q = m[1].trim();
+      // Hindari paragraf terlalu umum (bukan kalimat)
+      if (q.split(/\s+/).length >= 3) found.push(q);
+      if (found.length >= maxQuotes) break;
     }
-
-    // Fallback pseudo-quote (parafrasa singkat, tidak mengada-ada di luar ringkasan)
-    const s = (n.summary || n.title || "").trim();
-    if (!s) continue;
-
-    const trimmed =
-      s.length > 180 ? s.slice(0, 177).replace(/\s+\S*$/, "") + "..." : s;
-
-    out.push({
-      id: `q-${n.id}-gen`,
-      text: `${trimmed} (ringkas)`,
-      speaker: `${MENHUB_NAME}`,
-      date: n.publishedAt || nowISO,
-      context: n.title,
-      link: n.link,
-      tags: ["Kutipan", ...(n.entities || [])],
-    });
+    if (found.length >= maxQuotes) break;
   }
 
-  // Dedup by text
-  const seen = new Set<string>();
-  return out.filter((q) => {
-    const k = q.text.toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  // Unik + rapikan titik di akhir
+  const unique = Array.from(new Set(found)).map((s) =>
+    s.replace(/\s+([,.!?;:])\s*$/u, "$1").trim()
+  );
+
+  return unique.slice(0, maxQuotes).map((q, i) => ({
+    id: `q-${hashId(`${link}-${i}-${q.slice(0, 16)}`)}`,
+    text: q,
+    speaker: defaultSpeaker, // biarkan undefined kalau tidak ada
+    date,
+    context,
+    link,
+    tags: ["Kutipan", ...extraTags],
+  }));
+}
+
+/** Hash ringan untuk id */
+export function hashId(input: string): string {
+  let h = 0;
+  for (let i = 0; i < input.length; i++) {
+    h = (h << 5) - h + input.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
 }
