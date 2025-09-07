@@ -1,7 +1,9 @@
-import Parser from "rss-parser";
-import { NextResponse } from "next/server";
+/* eslint-disable @typescript-eslint/no-unused-vars */
 
-// ===== Types =====
+import Parser from "rss-parser";
+export const revalidate = 300; // 5 menit cache ISR
+
+// ========== Types ==========
 export type EventItem = {
   id: string;
   title: string;
@@ -10,7 +12,7 @@ export type EventItem = {
   attendedByMinister: boolean;
   source: string;
   tags: string[];
-  summary: string;
+  summary?: string;
   link: string;
 };
 
@@ -20,7 +22,7 @@ export type NewsItem = {
   source: string;
   publishedAt: string; // ISO
   link: string;
-  summary: string;
+  summary?: string;
   entities: string[];
 };
 
@@ -29,231 +31,248 @@ export type QuoteItem = {
   text: string;
   speaker: string;
   date: string; // ISO
-  context: string;
+  context?: string;
   link: string;
   tags: string[];
 };
 
-export type ApiPayload = {
-  news: NewsItem[];
-  events: EventItem[];
-  quotes: QuoteItem[];
+type Combined = { kind: "news"; item: NewsItem } | { kind: "event"; item: EventItem } | { kind: "quote"; item: QuoteItem };
+
+type ApiOk = {
+  ok: true;
   meta: {
+    range: string;
     generatedAt: string;
-    range: "24h" | "7d" | "30d" | "90d";
-    sourceCount: number;
+    srcCount: number;
+    kept: { news: number; events: number; quotes: number; total: number };
+    debug?: { fetched: number; afterDate: number; afterKeyword: number };
   };
+  data: { news: NewsItem[]; events: EventItem[]; quotes: QuoteItem[] };
 };
+type ApiErr = { ok: false; error: string };
 
-// ===== Constants =====
-const MENHUB_NAME = "Dudy Purwagandhi";
-const NAME_ALIASES: ReadonlyArray<string> = [
-  "Menhub",
-  "Menteri Perhubungan",
-  "Kemenhub",
-  "Kementerian Perhubungan",
-  MENHUB_NAME,
+type RssFeed = { name: string; url: string };
+
+// ========== Config ==========
+const KEYWORDS = [
+  "kemenhub",
+  "kementerian perhubungan",
+  "menhub",
+  "menteri perhubungan",
+  "dudy purwagandhi",
 ];
 
-// Feeds stabil
-const FEEDS: ReadonlyArray<{ name: string; url: string }> = [
-  { name: "Antara", url: "https://www.antaranews.com/rss/terkini.xml" },
-  { name: "Tempo", url: "https://rss.tempo.co/nasional" },
-  { name: "Kompas", url: "https://news.kompas.com/getrss/nasional" },
-  { name: "Detik", url: "https://rss.detik.com/index.php/detikcom" },
+const EVENT_WORDS = [
+  "agenda",
+  "rapat",
+  "rakor",
+  "kunjungan",
+  "meninjau",
+  "peninjauan",
+  "peresmian",
+  "meresmikan",
+  "peluncuran",
+  "launching",
+  "pembukaan",
+  "penutupan",
+  "menandatangani",
+  "penandatanganan",
+  "apel",
+  "upacara",
 ];
 
-// ===== Helpers (strictly typed) =====
-type FeedItem = {
-  title?: string;
-  link?: string;
-  isoDate?: string;
-  contentSnippet?: string;
-  content?: string;
-  pubDate?: string;
-  categories?: string[];
-  creator?: string;
-  guid?: string;
+const MODE_TAGS: Record<string, string[]> = {
+  Darat: ["terminal", "bus", "jalan", "darat", "perhubungan darat", "angkot", "ojek"],
+  Laut: ["pelayaran", "kapal", "pelabuhan", "laut", "ferry", "penyeberangan"],
+  Udara: ["bandara", "penerbangan", "pesawat", "udara", "airnav"],
+  Perkeretaapian: ["kereta", "kai", "stasiun", "lrt", "mrt", "jalur rel", "perkeretaapian"],
 };
 
-type ParsedFeed = {
-  title?: string;
-  items: FeedItem[];
-};
+const FEEDS: RssFeed[] = [
+  // Media besar nasional (stabil menyediakan RSS)
+  { name: "Antara Nasional", url: "https://www.antaranews.com/rss/nasional" },
+  { name: "Kompas News", url: "https://news.kompas.com/rss" },
+  { name: "Tempo Nasional", url: "https://rss.tempo.co/nas" },
+  { name: "Bisnis News", url: "https://www.bisnis.com/rss" },
+  { name: "Detik News", url: "https://rss.detik.com/index.php/detiknews" },
+  // Boleh tambah sumber lain di sini
+];
 
-const parser = new Parser<unknown, FeedItem>();
+// ========== Helpers ==========
+const toISO = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
 
-function normStr(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-function toISO(input: string | undefined): string {
-  const s = input ?? "";
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
-}
-
-function withinRange(iso: string, minDate: Date): boolean {
-  return new Date(iso).getTime() >= minDate.getTime();
-}
-
-function getMinDate(range: "24h" | "7d" | "30d" | "90d"): Date {
+function minDateFromRange(range: string): Date {
   const d = new Date();
-  const map: Record<"24h" | "7d" | "30d" | "90d", number> = {
-    "24h": 1,
-    "7d": 7,
-    "30d": 30,
-    "90d": 90,
-  };
-  d.setDate(d.getDate() - map[range]);
+  const map: Record<string, number> = { "24h": 1, "7d": 7, "30d": 30, "90d": 90 };
+  const days = map[range] ?? 7;
+  d.setDate(d.getDate() - days);
   return d;
 }
 
-function hasMenhubSignal(s: string): boolean {
-  const low = s.toLowerCase();
-  return NAME_ALIASES.some((kw) => low.includes(kw.toLowerCase()));
+function hasKeyword(s: string): boolean {
+  const text = s.toLowerCase();
+  return KEYWORDS.some((k) => text.includes(k));
 }
 
-const EVENT_HINTS: ReadonlyArray<string> = [
-  "peresmian",
-  "meresmikan",
-  "meninjau",
-  "kunjungan",
-  "rapat",
-  "rakor",
-  "mengecek",
-  "tinjau",
-  "menyaksikan",
-];
+function guessTags(text: string): string[] {
+  const t = text.toLowerCase();
+  const tags: string[] = [];
+  for (const [tag, words] of Object.entries(MODE_TAGS)) {
+    if (words.some((w) => t.includes(w))) tags.push(tag);
+  }
+  return tags.length ? tags : ["Umum"];
+}
 
 function looksLikeEvent(text: string): boolean {
-  const low = text.toLowerCase();
-  return EVENT_HINTS.some((w) => low.includes(w));
+  const t = text.toLowerCase();
+  return EVENT_WORDS.some((w) => t.includes(w));
 }
 
-function inferTags(text: string): string[] {
-  const low = text.toLowerCase();
-  const t: string[] = [];
-  if (low.includes("kereta") || /\bka\b/.test(low)) t.push("Perkeretaapian");
-  if (low.includes("bandara") || low.includes("udara") || low.includes("penerbangan")) t.push("Udara");
-  if (low.includes("pelabuhan") || low.includes("laut") || low.includes("pelayaran")) t.push("Laut");
-  if (low.includes("terminal") || low.includes("jalan") || low.includes("angkutan")) t.push("Darat");
-  return t.length ? t : ["Umum"];
+function looksLikeQuote(title: string): boolean {
+  // ada tanda kutip atau frasa "ujar/tegas/katanya"
+  const t = title.toLowerCase();
+  return /["“”]/.test(title) || /(ujar|tegas|ungkap|kata|menyebut)/.test(t);
 }
 
-async function fetchFeed(url: string): Promise<ParsedFeed> {
-  const feed = await parser.parseURL(url);
-  return { title: feed.title, items: feed.items };
+// ========== RSS fetch ==========
+type RssItemMinimal = { title?: string; link?: string; isoDate?: string; pubDate?: string; content?: string; contentSnippet?: string; };
+
+async function fetchFeed(feed: RssFeed, signal: AbortSignal): Promise<RssItemMinimal[]> {
+  const parser = new Parser();
+  try {
+    const out = await parser.parseURL(feed.url, { signal } as unknown as { signal: AbortSignal });
+    // rss-parser types generic; kita ambil yang penting saja
+    const items = (out.items || []) as unknown as RssItemMinimal[];
+    return items.map((it) => it);
+  } catch {
+    return [];
+  }
 }
 
-async function gather(range: "24h" | "7d" | "30d" | "90d"): Promise<ApiPayload> {
-  const minDate = getMinDate(range);
-  const news: NewsItem[] = [];
-  const events: EventItem[] = [];
-  const quotes: QuoteItem[] = [];
+// ========== Main ==========
+export async function GET(req: Request): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const range = (url.searchParams.get("range") || "7d").toLowerCase();
+    const debugFlag = url.searchParams.get("debug") === "1";
+    const minDate = minDateFromRange(range);
 
-  const results: PromiseSettledResult<ParsedFeed>[] = await Promise.allSettled(
-    FEEDS.map((f) => fetchFeed(f.url))
-  );
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 12000); // 12s timeout
 
-  for (let i = 0; i < results.length; i += 1) {
-    const res = results[i];
-    const sourceName = FEEDS[i]?.name ?? "Unknown";
-    if (res.status !== "fulfilled") continue;
+    // Fetch semua feed paralel
+    const allItemsArrays = await Promise.all(FEEDS.map((f) => fetchFeed(f, ctrl.signal)));
+    clearTimeout(t);
 
-    const feed = res.value;
-    for (const item of feed.items) {
-      const title = normStr(item.title);
-      const link = normStr(item.link);
-      const snippet = normStr(item.contentSnippet) || normStr(item.content);
-      const iso = toISO(item.isoDate ?? item.pubDate);
-      if (!withinRange(iso, minDate)) continue;
+    const flat: RssItemMinimal[] = ([] as RssItemMinimal[]).concat(...allItemsArrays);
+    const fetched = flat.length;
 
-      const joined = `${title} ${snippet}`;
-      const isMenhub = hasMenhubSignal(joined);
+    // Normalisasi → seleksi by tanggal
+    const afterDate = flat.filter((it) => {
+      const dStr = it.isoDate || it.pubDate || "";
+      const d = dStr ? new Date(dStr) : new Date();
+      return d >= minDate;
+    });
 
-      // Push News (umum)
-      news.push({
-        id: (item.guid || link || `${sourceName}-${iso}`) + "-n",
-        title: title || "(Tanpa judul)",
-        source: sourceName,
-        publishedAt: iso,
-        link: link || "#",
-        summary: snippet || title || "",
-        entities: inferTags(joined),
-      });
+    // Seleksi by keyword (luas)
+    const afterKeyword = afterDate.filter((it) => {
+      const bank = [it.title || "", it.contentSnippet || "", it.content || ""].join(" ");
+      return hasKeyword(bank);
+    });
 
-      // Event bila kuat indikasi kegiatan + Menhub
-      if (isMenhub && looksLikeEvent(joined)) {
-        events.push({
-          id: (item.guid || link || `${sourceName}-${iso}`) + "-e",
-          title: title || "(Kegiatan Menhub)",
-          date: iso,
-          location: "",
-          attendedByMinister: true,
-          source: sourceName,
-          tags: inferTags(joined),
-          summary: snippet || title || "",
-          link: link || "#",
-        });
+    // Mapping ke jenis
+    const news: NewsItem[] = [];
+    const events: EventItem[] = [];
+    const quotes: QuoteItem[] = [];
+
+    for (const it of afterKeyword) {
+      const title = (it.title || "").trim();
+      const link = it.link || "#";
+      const dateStr = it.isoDate || it.pubDate || new Date().toISOString();
+      const sourceHost = safeHostname(link);
+
+      if (looksLikeQuote(title)) {
+        // treat as quote
+        const q: QuoteItem = {
+          id: `q:${hash(title + link)}`,
+          text: stripQuotes(title),
+          speaker: "Menteri Perhubungan", // jika ingin lebih presisi perlu NER; sementara default
+          date: toISO(new Date(dateStr)),
+          context: sourceHost,
+          link,
+          tags: guessTags(title),
+        };
+        quotes.push(q);
+        continue;
       }
 
-      // Quote (sederhana): cari kalimat di dalam tanda kutip
-      if (isMenhub && snippet) {
-        const m = snippet.match(/["“”](.+?)["“”]/);
-        if (m && m[1]) {
-          quotes.push({
-            id: (item.guid || link || `${sourceName}-${iso}`) + "-q",
-            text: m[1],
-            speaker: MENHUB_NAME,
-            date: iso,
-            context: title || "",
-            link: link || "#",
-            tags: ["Kutipan", ...inferTags(joined)],
-          });
-        }
+      if (looksLikeEvent(title)) {
+        const e: EventItem = {
+          id: `e:${hash(title + link)}`,
+          title,
+          date: toISO(new Date(dateStr)),
+          location: "-", // bisa diperkaya dari teks jika ada
+          attendedByMinister: true,
+          source: sourceHost,
+          tags: guessTags(title),
+          summary: it.contentSnippet || undefined,
+          link,
+        };
+        events.push(e);
+      } else {
+        const n: NewsItem = {
+          id: `n:${hash(title + link)}`,
+          title,
+          source: sourceHost,
+          publishedAt: toISO(new Date(dateStr)),
+          link,
+          summary: it.contentSnippet || undefined,
+          entities: ["Kemenhub"],
+        };
+        news.push(n);
       }
     }
+
+    // Urutkan terbaru
+    news.sort((a, b) => +new Date(b.publishedAt) - +new Date(a.publishedAt));
+    events.sort((a, b) => +new Date(b.date) - +new Date(a.date));
+    quotes.sort((a, b) => +new Date(b.date) - +new Date(a.date));
+
+    const payload: ApiOk = {
+      ok: true,
+      meta: {
+        range,
+        generatedAt: toISO(new Date()),
+        srcCount: FEEDS.length,
+        kept: { news: news.length, events: events.length, quotes: quotes.length, total: news.length + events.length + quotes.length },
+        debug: debugFlag ? { fetched, afterDate: afterDate.length, afterKeyword: afterKeyword.length } : undefined,
+      },
+      data: { news, events, quotes },
+    };
+
+    return Response.json(payload, { status: 200 });
+  } catch (e) {
+    const err: ApiErr = { ok: false, error: (e as Error).message || "Internal error" };
+    return Response.json(err, { status: 500 });
   }
-
-  const byTimeDesc = <T extends { publishedAt?: string; date?: string }>(a: T, b: T) => {
-    const ta = new Date(a.publishedAt ?? a.date ?? 0).getTime();
-    const tb = new Date(b.publishedAt ?? b.date ?? 0).getTime();
-    return tb - ta;
-  };
-
-  news.sort(byTimeDesc);
-  events.sort(byTimeDesc);
-  quotes.sort(byTimeDesc);
-
-  return {
-    news,
-    events,
-    quotes,
-    meta: {
-      generatedAt: new Date().toISOString(),
-      range,
-      sourceCount: FEEDS.length,
-    },
-  };
 }
 
-// ISR/Cache hint
-export const revalidate = 60;
-
-// ===== Route =====
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const rangeParam =
-    (searchParams.get("range") as "24h" | "7d" | "30d" | "90d") || "7d";
-
+// ========== small utils ==========
+function stripQuotes(s: string): string {
+  return s.replace(/^[“"\s]+|[”"\s]+$/g, "");
+}
+function safeHostname(link: string): string {
   try {
-    const data = await gather(rangeParam);
-    return NextResponse.json<ApiPayload>(data, { status: 200 });
-  } catch (err) {
-    return NextResponse.json(
-      { error: "fetch_failed", message: String(err) },
-      { status: 500 }
-    );
+    return new URL(link).hostname.replace(/^www\./, "");
+  } catch {
+    return "unknown";
   }
+}
+function hash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h << 5) - h + s.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
 }
